@@ -8,6 +8,7 @@ use tool_modeussync\courses_consts;
 use tool_modeussync\debug_utils;
 use tool_modeussync\repository\courses_repository;
 use tool_modeussync\task\base\base_sync_job;
+use tool_modeussync\service\SyncService;
 
 class pull_courses extends base_sync_job
 {
@@ -19,14 +20,23 @@ class pull_courses extends base_sync_job
     public function do_work(array $currentSession, ?array $lastClosedSession): bool
     {
         $categoryId = get_config('tool_modeussync', 'default_category');
+
         if (!$categoryId) {
             throw new \Exception("Error: Setting 'default_category' not set");
         }
 
         $prototypes = $this->lmsAdapterService->getCoursesToCreate($currentSession['id']);
+
         if (count($prototypes) != 0) {
             $created = $this->create_courses($prototypes, $categoryId);
+
             mtrace("Всего создано " . count($created) . " курсов");
+
+            if (!empty($created)) {
+                $syncService = new SyncService();
+                $syncService->send_created_courses($created);
+                mtrace('Отправлены данные о созданных курсах во внешний сервис');
+            }
         }
 
         return true;
@@ -64,7 +74,18 @@ class pull_courses extends base_sync_job
 
                 $this->create_sections($coursePrototype['sections'], $courseId);
 
-                $resultcourses[] = array('id' => $courseId, 'shortname' => $course['shortname']);
+                $idModeus = $this->extract_modeus_id_from_summary($course['summary']);
+
+                if ($idModeus === null) {
+                    mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
+                } else {
+                    mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
+                }
+
+                $resultcourses[] = array(
+                    'id_lms' => $courseId,
+                    'id_modeus' => $idModeus,
+                );
                 $transaction->allow_commit();
 
                 mtrace("Создан курс [$fullname], id: ($courseId)");
@@ -76,6 +97,21 @@ class pull_courses extends base_sync_job
         }
 
         return $resultcourses;
+    }
+
+    private function extract_modeus_id_from_summary(?string $summary): ?string
+    {
+        if (empty($summary)) {
+            return null;
+        }
+
+        $pattern = '/Курс\s+создан\s+по\s+РМУП\s*\[([^\]]+)\]/u';
+
+        if (preg_match($pattern, $summary, $matches)) {
+            return trim($matches[1]);
+        }
+
+        return null;
     }
 
     private function hasCourseWithIdNumber($courses, $idnumber)
