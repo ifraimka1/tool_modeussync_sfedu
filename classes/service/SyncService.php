@@ -8,7 +8,7 @@ class SyncService
 {
     /**
      * Базовый URL стороннего сервиса.
-     * TODO: на реальный URL, когда он появится.
+     * TODO: заменить на реальный URL.
      */
     private const BASE_URL = 'http://95.174.104.37:4200';
 
@@ -22,7 +22,7 @@ class SyncService
      *
      * Формат payload:
      * [
-     *   ['id' => 123, 'idModeus' => 'uuid'],
+     *   ['id_lms' => 123, 'id_modeus' => 'uuid'],
      *   ...
      * ]
      *

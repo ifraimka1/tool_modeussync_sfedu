@@ -33,9 +33,10 @@ class pull_courses extends base_sync_job
             mtrace("Всего создано " . count($created) . " курсов");
 
             if (!empty($created)) {
-                $syncService = new SyncService();
-                $syncService->send_created_courses($created);
+                $syncService = new \tool_modeussync\service\SyncService();
+                $syncResponse = $syncService->send_created_courses($created);
                 mtrace('Отправлены данные о созданных курсах во внешний сервис');
+                $this->process_sync_response($syncResponse);
             }
         }
 
@@ -112,6 +113,208 @@ class pull_courses extends base_sync_job
         }
 
         return null;
+    }
+
+    private function process_sync_response(array $response): void
+    {
+        if (empty($response)) {
+            mtrace('Sync response is empty');
+            return;
+        }
+
+        mtrace('Processing sync response...');
+
+        if (empty($response['results']) || !is_array($response['results'])) {
+            mtrace('Sync response does not contain results array');
+            return;
+        }
+
+        foreach ($response['results'] as $courseResult) {
+            try {
+                $this->create_modeus_assignments_from_result($courseResult);
+            } catch (\Throwable $e) {
+                mtrace('Ошибка при обработке course result: ' . json_encode($courseResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                mtrace('Exception class: ' . get_class($e));
+                mtrace('Exception message: ' . $e->getMessage());
+                mtrace('Exception file: ' . $e->getFile() . ':' . $e->getLine());
+                mtrace($e->getTraceAsString());
+            }
+        }
+    }
+
+    private function create_modeus_assignments_from_result(array $courseResult): void
+    {
+        global $DB;
+
+        $courseid = isset($courseResult['id_lms']) ? (int)$courseResult['id_lms'] : 0;
+        $success = $courseResult['success'] ?? false;
+        $courseData = $courseResult['courseData'] ?? [];
+
+        if (!$success) {
+            mtrace("Пропускаю курс: success=false, id_lms={$courseid}");
+            return;
+        }
+
+        if (!$courseid) {
+            mtrace('Пропускаю курс: отсутствует id_lms');
+            return;
+        }
+
+        if (empty($courseData) || !is_array($courseData)) {
+            mtrace("Для курса {$courseid} нет courseData");
+            return;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid], '*', IGNORE_MISSING);
+        if (!$course) {
+            mtrace("Курс Moodle с id={$courseid} не найден");
+            return;
+        }
+
+        $sectionnum = $this->get_or_create_modeus_assignments_section((int)$course->id);
+
+        foreach ($courseData as $item) {
+            $this->create_modeus_assignment((int)$course->id, $sectionnum, $item);
+        }
+    }
+
+    private function get_or_create_modeus_assignments_section(int $courseid): int
+    {
+        global $DB, $CFG;
+
+        require_once($CFG->dirroot . '/course/lib.php');
+
+        $sectionname = 'Задания из Modeus';
+
+        $existing = $DB->get_record('course_sections', [
+            'course' => $courseid,
+            'name' => $sectionname,
+        ], 'id, section', IGNORE_MISSING);
+
+        if ($existing) {
+            mtrace("Секция '{$sectionname}' уже существует в курсе {$courseid}, section={$existing->section}");
+            return (int)$existing->section;
+        }
+
+        $lastsection = $DB->get_field_sql(
+            "SELECT MAX(section)
+           FROM {course_sections}
+          WHERE course = ?",
+            [$courseid]
+        );
+
+        $newsectionnum = ((int)$lastsection) + 1;
+
+        course_create_section($courseid, $newsectionnum);
+
+        $section = $DB->get_record('course_sections', [
+            'course' => $courseid,
+            'section' => $newsectionnum,
+        ], '*', MUST_EXIST);
+
+        $section->name = $sectionname;
+        $DB->update_record('course_sections', $section);
+
+        rebuild_course_cache($courseid, true);
+
+        mtrace("Создана секция '{$sectionname}' в курсе {$courseid}, section={$newsectionnum}");
+
+        return $newsectionnum;
+    }
+
+    private function create_modeus_assignment(int $courseid, int $sectionnum, array $item): void
+    {
+        global $CFG, $DB;
+
+        require_once($CFG->dirroot . '/course/modlib.php');
+        require_once($CFG->dirroot . '/mod/assign/lib.php');
+
+        $modeusitemid = trim((string)($item['id'] ?? ''));
+        $name = trim((string)($item['name'] ?? ''));
+        $grade = isset($item['grade']) ? (float)$item['grade'] : 0;
+
+        if ($modeusitemid === '' || $name === '') {
+            mtrace('Пропускаю элемент курса: пустой id или name');
+            return;
+        }
+
+        $sql = "SELECT cm.id
+              FROM {course_modules} cm
+              JOIN {modules} m ON m.id = cm.module
+             WHERE cm.course = :courseid
+               AND m.name = :modname
+               AND cm.idnumber = :idnumber";
+
+        $existing = $DB->get_record_sql($sql, [
+            'courseid' => $courseid,
+            'modname' => 'assign',
+            'idnumber' => $modeusitemid,
+        ]);
+
+        if ($existing) {
+            mtrace("Задание '{$name}' уже существует в курсе {$courseid} (Modeus id: {$modeusitemid})");
+            return;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+        $module = $DB->get_record('modules', ['name' => 'assign'], '*', MUST_EXIST);
+
+        $moduleinfo = new \stdClass();
+        $moduleinfo->course = $courseid;
+        $moduleinfo->module = $module->id;
+        $moduleinfo->modulename = 'assign';
+        $moduleinfo->add = 'assign';
+
+        $moduleinfo->name = $name;
+        $moduleinfo->intro = '';
+        $moduleinfo->introformat = FORMAT_HTML;
+        $moduleinfo->section = $sectionnum;
+
+        $moduleinfo->visible = 1;
+        $moduleinfo->visibleoncoursepage = 1;
+        $moduleinfo->cmidnumber = '';
+        $moduleinfo->idnumber = $modeusitemid;
+        $moduleinfo->groupmode = 0;
+        $moduleinfo->groupingid = 0;
+        $moduleinfo->groupmembersonly = 0;
+        $moduleinfo->availability = null;
+        $moduleinfo->completion = 0;
+        $moduleinfo->completionview = 0;
+        $moduleinfo->completionexpected = 0;
+        $moduleinfo->showdescription = 0;
+
+        $moduleinfo->grade = $grade;
+        $moduleinfo->gradecat = 0;
+
+        $moduleinfo->allowsubmissionsfromdate = 0;
+        $moduleinfo->duedate = 0;
+        $moduleinfo->cutoffdate = 0;
+        $moduleinfo->gradingduedate = 0;
+
+        $moduleinfo->assignsubmission_onlinetext_enabled = 0;
+        $moduleinfo->assignsubmission_file_enabled = 0;
+
+        $moduleinfo->submissiondrafts = 0;
+        $moduleinfo->requiresubmissionstatement = 0;
+        $moduleinfo->sendnotifications = 0;
+        $moduleinfo->sendlatenotifications = 0;
+        $moduleinfo->sendstudentnotifications = 0;
+
+        $moduleinfo->teamsubmission = 0;
+        $moduleinfo->requireallteammemberssubmit = 0;
+        $moduleinfo->blindmarking = 0;
+        $moduleinfo->markingworkflow = 0;
+        $moduleinfo->markingallocation = 0;
+
+        $moduleinfo->attemptreopenmethod = 'none';
+        $moduleinfo->maxattempts = -1;
+        $moduleinfo->completionsubmit = 0;
+
+        mtrace("Создаю задание '{$name}' в курсе {$courseid}, section={$sectionnum}, grade={$grade}, modeusId={$modeusitemid}");
+
+        $created = add_moduleinfo($moduleinfo, $course);
+
+        mtrace("Создано задание '{$name}' в курсе {$courseid}, cmid={$created->coursemodule}, grade={$grade}, modeusId={$modeusitemid}");
     }
 
     private function hasCourseWithIdNumber($courses, $idnumber)
