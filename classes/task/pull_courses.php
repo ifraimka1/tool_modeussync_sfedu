@@ -33,10 +33,19 @@ class pull_courses extends base_sync_job
             mtrace("Всего создано " . count($created) . " курсов");
 
             if (!empty($created)) {
-                $syncService = new \tool_modeussync\service\SyncService();
+                $syncService = new SyncService();
                 $syncResponse = $syncService->send_created_courses($created);
+
                 mtrace('Отправлены данные о созданных курсах во внешний сервис');
-                $this->process_sync_response($syncResponse);
+
+                $updatedCourses = $this->process_sync_response($syncResponse);
+
+                if (!empty($updatedCourses)) {
+                    $syncService->send_sync_courses($updatedCourses);
+                    mtrace('Отправлены данные об обновленных курсах на endpoint /sync');
+                } else {
+                    mtrace('Нет курсов для отправки на endpoint /sync');
+                }
             }
         }
 
@@ -115,23 +124,29 @@ class pull_courses extends base_sync_job
         return null;
     }
 
-    private function process_sync_response(array $response): void
+    private function process_sync_response(array $response): array
     {
+        $updatedCourses = [];
+
         if (empty($response)) {
             mtrace('Sync response is empty');
-            return;
+            return $updatedCourses;
         }
 
         mtrace('Processing sync response...');
 
         if (empty($response['results']) || !is_array($response['results'])) {
             mtrace('Sync response does not contain results array');
-            return;
+            return $updatedCourses;
         }
 
         foreach ($response['results'] as $courseResult) {
             try {
-                $this->create_modeus_assignments_from_result($courseResult);
+                $updatedCourse = $this->create_modeus_assignments_from_result($courseResult);
+
+                if (!empty($updatedCourse)) {
+                    $updatedCourses[] = $updatedCourse;
+                }
             } catch (\Throwable $e) {
                 mtrace('Ошибка при обработке course result: ' . json_encode($courseResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                 mtrace('Exception class: ' . get_class($e));
@@ -140,35 +155,48 @@ class pull_courses extends base_sync_job
                 mtrace($e->getTraceAsString());
             }
         }
+
+        return $updatedCourses;
     }
 
-    private function create_modeus_assignments_from_result(array $courseResult): void
+    private function create_modeus_assignments_from_result(array $courseResult): ?array
     {
         global $DB;
 
         $courseid = isset($courseResult['id_lms']) ? (int)$courseResult['id_lms'] : 0;
         $success = $courseResult['success'] ?? false;
         $courseData = $courseResult['courseData'] ?? [];
+        $idmodeus = $courseResult['id_modeus'] ?? null;
 
         if (!$success) {
             mtrace("Пропускаю курс: success=false, id_lms={$courseid}");
-            return;
+            return null;
         }
 
         if (!$courseid) {
             mtrace('Пропускаю курс: отсутствует id_lms');
-            return;
+            return null;
+        }
+
+        if (empty($idmodeus)) {
+            mtrace("Пропускаю курс {$courseid}: отсутствует id_modeus");
+            return null;
+        }
+
+        $course = $DB->get_record('course', ['id' => $courseid], 'id, idnumber', IGNORE_MISSING);
+        if (!$course) {
+            mtrace("Курс Moodle с id={$courseid} не найден");
+            return null;
+        }
+
+        if (empty($course->idnumber)) {
+            mtrace("У курса {$courseid} пустой idnumber, пропускаю отправку на /sync");
+            return null;
         }
 
         if (empty($courseData) || !is_array($courseData)) {
             mtrace("Для курса {$courseid} нет courseData");
-            return;
-        }
-
-        $course = $DB->get_record('course', ['id' => $courseid], '*', IGNORE_MISSING);
-        if (!$course) {
-            mtrace("Курс Moodle с id={$courseid} не найден");
-            return;
+            return null;
         }
 
         $sectionnum = $this->get_or_create_modeus_assignments_section((int)$course->id);
@@ -176,6 +204,11 @@ class pull_courses extends base_sync_job
         foreach ($courseData as $item) {
             $this->create_modeus_assignment((int)$course->id, $sectionnum, $item);
         }
+
+        return [
+            'id_modeus' => $idmodeus,
+            'id_lms' => (string)$course->idnumber,
+        ];
     }
 
     private function get_or_create_modeus_assignments_section(int $courseid): int
