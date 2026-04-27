@@ -87,6 +87,13 @@ if ($hassiteconfig) {
                 "20"
             )
         );
+        $courses_settings->add(new admin_setting_configtext(
+            'tool_modeussync/syncservice_base_url',
+            get_string('syncservice_base_url', 'tool_modeussync'),
+            get_string('syncservice_base_url_desc', 'tool_modeussync'),
+            '',
+            PARAM_URL
+        ));
 
         $grades_settings->add(
             new admin_setting_configtext(

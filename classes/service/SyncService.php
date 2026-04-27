@@ -7,12 +7,6 @@ defined('MOODLE_INTERNAL') || die();
 class SyncService
 {
     /**
-     * Базовый URL стороннего сервиса.
-     * TODO: заменить на реальный URL.
-     */
-    private const BASE_URL = 'http://192.168.120.15:34457';
-
-    /**
      * Endpoint для отправки созданных курсов.
      */
     private const CREATED_COURSES_ENDPOINT = '/new-course';
@@ -21,6 +15,23 @@ class SyncService
      * Endpoint для отправки курсов, в которых сгенерились задания.
      */
     private const SYNC_ENDPOINT = '/sync';
+
+    private function get_base_url(): string
+    {
+        $baseurl = get_config('tool_modeussync', 'syncservice_base_url');
+
+        if (empty($baseurl)) {
+            throw new \moodle_exception(
+                'syncservicebaseurlnotset',
+                'tool_modeussync',
+                '',
+                null,
+                'SyncService base URL is not configured'
+            );
+        }
+
+        return rtrim($baseurl, '/');
+    }
 
     /**
      * Отправляет список созданных курсов во внешний сервис.
@@ -42,7 +53,7 @@ class SyncService
             return [];
         }
 
-        $url = rtrim(self::BASE_URL, '/') . self::CREATED_COURSES_ENDPOINT;
+        $url = $this->get_base_url() . self::CREATED_COURSES_ENDPOINT;
 
         $payload = array_values($courses);
 
@@ -98,7 +109,7 @@ class SyncService
             return [];
         }
 
-        $url = rtrim(self::BASE_URL, '/') . self::SYNC_ENDPOINT;
+        $url = $this->get_base_url() . self::SYNC_ENDPOINT;
         $payload = array_values($courses);
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 

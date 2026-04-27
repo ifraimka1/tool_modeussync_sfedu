@@ -19,3 +19,6 @@ $string['lti_field_user_id'] = 'The field where the user ID for LTI is stored';
 $string['lti_field_user_id_descr'] = 'This field will be used to synchronize the list of users and their grades with the LTI Platform. Attention! Changing this field will only bind new users correctly. Old users will remain tied to the old ID';
 $string['default_category'] = 'Default category for created courses';
 $string['default_category_descr'] = 'Courses created based on data from the Platform will be placed in this category';
+$string['syncservicebaseurlnotset'] = 'SyncService base URL is not configured';
+$string['syncservice_base_url'] = 'SyncService URL';
+$string['syncservice_base_url_desc'] = 'Базовый домен или IP-адрес для SyncService (прим. https://www.syncservice.com/)';
