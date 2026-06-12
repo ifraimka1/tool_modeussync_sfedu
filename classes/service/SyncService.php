@@ -53,14 +53,15 @@ class SyncService
             return [];
         }
 
+        $apikey = trim((string)get_config('tool_modeussync', 'internal_api_key'));
+
+        if ($apikey === '') {
+            throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
+        }
+
         $url = $this->get_base_url() . self::CREATED_COURSES_ENDPOINT;
 
         $payload = array_values($courses);
-
-        $headers = [
-            'Content-Type: application/json',
-            'Accept: application/json',
-        ];
 
         mtrace('SyncService POST: ' . $url);
         mtrace('SyncService payload: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -73,6 +74,7 @@ class SyncService
             'CURLOPT_HTTPHEADER' => [
                 'Content-Type: application/json',
                 'Accept: application/json',
+                'X-Internal-API-Key: ' . $apikey,
             ],
         ];
 
@@ -109,6 +111,12 @@ class SyncService
             return [];
         }
 
+        $apikey = trim((string)get_config('tool_modeussync', 'internal_api_key'));
+
+        if ($apikey === '') {
+            throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
+        }
+
         $url = $this->get_base_url() . self::SYNC_ENDPOINT;
         $payload = array_values($courses);
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -134,6 +142,7 @@ class SyncService
             'CURLOPT_HTTPHEADER' => [
                 'Content-Type: application/json',
                 'Accept: application/json',
+                'X-Internal-API-Key: ' . $apikey,
             ],
         ];
 

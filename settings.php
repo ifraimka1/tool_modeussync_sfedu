@@ -94,6 +94,12 @@ if ($hassiteconfig) {
             '',
             PARAM_URL
         ));
+        $courses_settings->add(new admin_setting_configpasswordunmask(
+            'tool_modeussync/internal_api_key',
+            get_string('internal_api_key', 'tool_modeussync'),
+            get_string('internal_api_key_desc', 'tool_modeussync'),
+            ''
+        ));
 
         $grades_settings->add(
             new admin_setting_configtext(

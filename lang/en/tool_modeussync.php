@@ -22,3 +22,7 @@ $string['default_category_descr'] = 'Courses created based on data from the Plat
 $string['syncservicebaseurlnotset'] = 'SyncService base URL is not configured';
 $string['syncservice_base_url'] = 'SyncService URL';
 $string['syncservice_base_url_desc'] = 'Базовый домен или IP-адрес для SyncService (прим. https://www.syncservice.com/)';
+$string['internal_api_key'] = 'Internal API key';
+$string['internal_api_key_desc'] = 'Ключ API для запросов';
+$string['missinginternalapikey'] = 'Internal API key is not configured.';
+$string['syncrequestfailed'] = 'SyncService request failed.';
