@@ -5,13 +5,16 @@ namespace tool_modeussync\task;
 use completion_info;
 use Throwable;
 use tool_modeussync\courses_consts;
-use tool_modeussync\debug_utils;
 use tool_modeussync\repository\courses_repository;
 use tool_modeussync\task\base\base_sync_job;
 use tool_modeussync\service\SyncService;
 
 class pull_courses extends base_sync_job
 {
+    private const MAX_LOG_VALUE_LENGTH = 4096;
+
+    private const SYNC_COURSES_BATCH_SIZE = 25;
+
     public function get_name()
     {
         return 'pull_courses';
@@ -26,27 +29,50 @@ class pull_courses extends base_sync_job
         }
 
         $prototypes = $this->lmsAdapterService->getCoursesToCreate($currentSession['id']);
+        mtrace("Получено курсов из первого запроса: " . count($prototypes));
 
         if (count($prototypes) != 0) {
-            $created = $this->create_courses($prototypes, $categoryId);
+            $coursesForSync = $this->create_courses($prototypes, $categoryId);
 
-            mtrace("Всего создано " . count($created) . " курсов");
+            mtrace("Всего курсов для отправки в SyncService: " . count($coursesForSync));
 
-            if (!empty($created)) {
+            if (!empty($coursesForSync)) {
                 $syncService = new SyncService();
-                $syncResponse = $syncService->send_created_courses($created);
+                $batches = array_chunk($coursesForSync, self::SYNC_COURSES_BATCH_SIZE);
+                $batchCount = count($batches);
 
-                mtrace('Отправлены данные о созданных курсах во внешний сервис');
+                foreach ($batches as $batchIndex => $coursesBatch) {
+                    $batchNumber = $batchIndex + 1;
+                    mtrace("Отправляю batch {$batchNumber}/{$batchCount} во внешний сервис, курсов: " . count($coursesBatch));
 
-                $updatedCourses = $this->process_sync_response($syncResponse);
+                    try {
+                        $syncResponse = $syncService->send_created_courses($coursesBatch);
+                    } catch (Throwable $e) {
+                        $this->trace_throwable("Ошибка при отправке batch {$batchNumber}/{$batchCount} в SyncService", $e);
+                        continue;
+                    }
 
-                if (!empty($updatedCourses)) {
-                    $syncService->send_sync_courses($updatedCourses);
-                    mtrace('Отправлены данные об обновленных курсах на endpoint /sync');
-                } else {
-                    mtrace('Нет курсов для отправки на endpoint /sync');
+                    mtrace("Отправлены данные о курсах во внешний сервис, batch {$batchNumber}/{$batchCount}");
+                    mtrace("Ответ SyncService batch {$batchNumber}/{$batchCount}: " . $this->format_log_value($this->encode_log_value($syncResponse)));
+
+                    $updatedCourses = $this->process_sync_response($syncResponse);
+                    mtrace("Курсов для отправки на endpoint /sync, batch {$batchNumber}/{$batchCount}: " . count($updatedCourses));
+
+                    if (!empty($updatedCourses)) {
+                        try {
+                            $syncResponse = $syncService->send_sync_courses($updatedCourses);
+                            mtrace("Отправлены данные об обновленных курсах на endpoint /sync, batch {$batchNumber}/{$batchCount}");
+                            mtrace("Ответ SyncService /sync batch {$batchNumber}/{$batchCount}: " . $this->format_log_value($this->encode_log_value($syncResponse)));
+                        } catch (Throwable $e) {
+                            $this->trace_throwable("Ошибка при отправке batch {$batchNumber}/{$batchCount} на endpoint /sync", $e);
+                        }
+                    } else {
+                        mtrace("Нет курсов для отправки на endpoint /sync, batch {$batchNumber}/{$batchCount}");
+                    }
                 }
             }
+        } else {
+            mtrace("Нет курсов для обработки из первого запроса");
         }
 
         return true;
@@ -73,8 +99,22 @@ class pull_courses extends base_sync_job
 
             try {
                 $idnumber = $coursePrototype['id'];
-                if ($this->hasCourseWithIdNumber($existingCourses, $idnumber)) {
-                    mtrace("Курс с IDNumber = [$idnumber] уже существует");
+                $idModeus = $this->extract_modeus_id_from_summary($coursePrototype['summary'] ?? null);
+                $existingCourse = $this->getCourseWithIdNumber($existingCourses, $idnumber);
+
+                if ($existingCourse !== null) {
+                    mtrace("Курс с IDNumber = [$idnumber] уже существует, id: ({$existingCourse->id})");
+
+                    if ($idModeus === null) {
+                        mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
+                    } else {
+                        mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
+                    }
+
+                    $resultcourses[] = array(
+                        'id_lms' => (int)$existingCourse->id,
+                        'id_modeus' => $idModeus,
+                    );
                     continue;
                 }
 
@@ -83,8 +123,6 @@ class pull_courses extends base_sync_job
                 $courseId = create_course((object) $course)->id;
 
                 $this->create_sections($coursePrototype['sections'], $courseId);
-
-                $idModeus = $this->extract_modeus_id_from_summary($course['summary']);
 
                 if ($idModeus === null) {
                     mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
@@ -101,7 +139,7 @@ class pull_courses extends base_sync_job
                 mtrace("Создан курс [$fullname], id: ($courseId)");
             } catch (Throwable $e) {
                 mtrace("Ошибка при создании курса [$fullname]:");
-                debug_utils::traceError($e);
+                $this->trace_throwable("Ошибка при создании/обработке курса [$fullname]", $e);
                 $DB->force_transaction_rollback();
             }
         }
@@ -140,6 +178,19 @@ class pull_courses extends base_sync_job
             return $updatedCourses;
         }
 
+        mtrace('Sync response results count: ' . count($response['results']));
+        $assignmentsCount = 0;
+
+        foreach ($response['results'] as $courseResult) {
+            $courseData = $courseResult['courseData'] ?? [];
+
+            if (is_array($courseData)) {
+                $assignmentsCount += count($courseData);
+            }
+        }
+
+        mtrace('Всего заданий пришло от SyncService: ' . $assignmentsCount);
+
         foreach ($response['results'] as $courseResult) {
             try {
                 $updatedCourse = $this->create_modeus_assignments_from_result($courseResult);
@@ -148,7 +199,11 @@ class pull_courses extends base_sync_job
                     $updatedCourses[] = $updatedCourse;
                 }
             } catch (\Throwable $e) {
-                mtrace('Ошибка при обработке course result: ' . json_encode($courseResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                $courseResultJson = json_encode($courseResult, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                mtrace(
+                    'Ошибка при обработке course result: ' .
+                    $this->format_log_value($courseResultJson === false ? json_last_error_msg() : $courseResultJson)
+                );
                 mtrace('Exception class: ' . get_class($e));
                 mtrace('Exception message: ' . $e->getMessage());
                 mtrace('Exception file: ' . $e->getFile() . ':' . $e->getLine());
@@ -167,6 +222,9 @@ class pull_courses extends base_sync_job
         $success = $courseResult['success'] ?? false;
         $courseData = $courseResult['courseData'] ?? [];
         $idmodeus = $courseResult['id_modeus'] ?? null;
+        $courseDataCount = is_array($courseData) ? count($courseData) : 0;
+
+        mtrace("Обрабатываю ответ SyncService для курса id_lms={$courseid}, courseDataCount={$courseDataCount}");
 
         if (!$success) {
             mtrace("Пропускаю курс: success=false, id_lms={$courseid}");
@@ -189,6 +247,11 @@ class pull_courses extends base_sync_job
             return null;
         }
 
+        mtrace(
+            "Связка идентификаторов курса: SyncService id_lms={$courseid}; " .
+            "Moodle course.id={$course->id}; Moodle course.idnumber={$course->idnumber}; id_modeus={$idmodeus}"
+        );
+
         if (empty($course->idnumber)) {
             mtrace("У курса {$courseid} пустой idnumber, пропускаю отправку на /sync");
             return null;
@@ -199,16 +262,156 @@ class pull_courses extends base_sync_job
             return null;
         }
 
-        $sectionnum = $this->get_or_create_modeus_assignments_section((int)$course->id);
+        $missingCourseData = $this->filter_missing_modeus_assignment_items((int)$course->id, $courseData);
 
-        foreach ($courseData as $item) {
-            $this->create_modeus_assignment((int)$course->id, $sectionnum, $item);
+        if (empty($missingCourseData)) {
+            mtrace("В курсе {$courseid} уже есть все задания, полученные от SyncService");
+        } else {
+            mtrace("В курсе {$courseid} будут созданы задания: " . $this->format_assignment_ids_for_log($missingCourseData));
+            $sectionnum = $this->get_or_create_modeus_assignments_section((int)$course->id);
+            $assignmentErrors = 0;
+
+            foreach ($missingCourseData as $item) {
+                try {
+                    $this->create_modeus_assignment((int)$course->id, $sectionnum, $item);
+                } catch (Throwable $e) {
+                    $assignmentErrors++;
+                    $modeusitemid = trim((string)($item['id'] ?? ''));
+                    $name = trim((string)($item['name'] ?? ''));
+                    $this->trace_throwable(
+                        "Ошибка при создании задания курса {$courseid}, Modeus id={$modeusitemid}, name={$name}",
+                        $e
+                    );
+                }
+            }
+
+            if ($assignmentErrors > 0) {
+                mtrace("Курс {$courseid}: не отправляю на /sync из-за ошибок создания заданий: {$assignmentErrors}");
+                return null;
+            }
         }
 
         return [
             'id_modeus' => $idmodeus,
             'id_lms' => (string)$course->idnumber,
         ];
+    }
+
+    private function format_log_value(string $value): string
+    {
+        $length = strlen($value);
+
+        if ($length <= self::MAX_LOG_VALUE_LENGTH) {
+            return $value;
+        }
+
+        return 'length: ' . $length . ' bytes; preview: ' .
+            \core_text::substr($value, 0, self::MAX_LOG_VALUE_LENGTH) .
+            '... [truncated]';
+    }
+
+    private function encode_log_value($value): string
+    {
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        if ($encoded === false) {
+            return 'json_encode error: ' . json_last_error_msg();
+        }
+
+        return $encoded;
+    }
+
+    private function trace_throwable(string $context, Throwable $e): void
+    {
+        mtrace($context);
+        mtrace('Exception class: ' . get_class($e));
+        mtrace('Exception message: ' . $e->getMessage());
+        mtrace('Exception file: ' . $e->getFile() . ':' . $e->getLine());
+        mtrace('Exception trace: ' . $e->getTraceAsString());
+    }
+
+    private function filter_missing_modeus_assignment_items(int $courseid, array $courseData): array
+    {
+        global $DB;
+
+        $modeusitemids = [];
+
+        foreach ($courseData as $item) {
+            $modeusitemid = trim((string)($item['id'] ?? ''));
+
+            if ($modeusitemid !== '') {
+                $modeusitemids[$modeusitemid] = true;
+            }
+        }
+
+        if (empty($modeusitemids)) {
+            mtrace("В курсе {$courseid} задания от SyncService без непустых id: " . count($courseData));
+            return $courseData;
+        }
+
+        $sql = "SELECT cm.idnumber
+              FROM {course_modules} cm
+              JOIN {modules} m ON m.id = cm.module
+             WHERE cm.course = :courseid
+               AND m.name = :modname
+               AND cm.idnumber IS NOT NULL
+               AND cm.idnumber <> ''";
+
+        $params = [
+            'courseid' => $courseid,
+            'modname' => 'assign',
+        ];
+
+        $existingids = [];
+
+        foreach ($DB->get_fieldset_sql($sql, $params) as $existingid) {
+            $existingid = (string)$existingid;
+
+            if (isset($modeusitemids[$existingid])) {
+                $existingids[$existingid] = true;
+            }
+        }
+
+        $missing = [];
+
+        foreach ($courseData as $item) {
+            $modeusitemid = trim((string)($item['id'] ?? ''));
+
+            if ($modeusitemid === '' || !isset($existingids[$modeusitemid])) {
+                $missing[] = $item;
+            }
+        }
+
+        mtrace(
+            "В курсе {$courseid} заданий от SyncService: " . count($courseData) .
+            ", уже существует: " . count($existingids) .
+            ", будет создано: " . count($missing)
+        );
+        mtrace("В курсе {$courseid} уже есть задания: " . $this->format_assignment_ids_for_log(array_keys($existingids)));
+        mtrace("В курсе {$courseid} недостающие задания: " . $this->format_assignment_ids_for_log($missing));
+
+        return $missing;
+    }
+
+    private function format_assignment_ids_for_log(array $items): string
+    {
+        if (empty($items)) {
+            return '(нет)';
+        }
+
+        $ids = [];
+
+        foreach ($items as $item) {
+            if (is_array($item)) {
+                $id = trim((string)($item['id'] ?? ''));
+            } else {
+                $id = trim((string)$item);
+            }
+
+            $ids[] = $id === '' ? '(пустой id)' : $id;
+        }
+
+        return $this->format_log_value(implode(', ', $ids));
     }
 
     private function get_or_create_modeus_assignments_section(int $courseid): int
@@ -305,7 +508,7 @@ class pull_courses extends base_sync_job
 
         $moduleinfo->visible = 1;
         $moduleinfo->visibleoncoursepage = 1;
-        $moduleinfo->cmidnumber = '';
+        $moduleinfo->cmidnumber = $modeusitemid;
         $moduleinfo->idnumber = $modeusitemid;
         $moduleinfo->groupmode = 0;
         $moduleinfo->groupingid = 0;
@@ -350,15 +553,15 @@ class pull_courses extends base_sync_job
         mtrace("Создано задание '{$name}' в курсе {$courseid}, cmid={$created->coursemodule}, grade={$grade}, modeusId={$modeusitemid}");
     }
 
-    private function hasCourseWithIdNumber($courses, $idnumber)
+    private function getCourseWithIdNumber($courses, $idnumber)
     {
         foreach ($courses as $k) {
             if ($k->idnumber == $idnumber) {
-                return true;
+                return $k;
             }
         }
 
-        return false;
+        return null;
     }
 
     private function createCourse($coursePrototype, $categoryId)

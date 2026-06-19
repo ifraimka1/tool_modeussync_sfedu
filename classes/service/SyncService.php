@@ -7,6 +7,21 @@ defined('MOODLE_INTERNAL') || die();
 class SyncService
 {
     /**
+     * Maximum amount of request/response body bytes written to Moodle task logs.
+     */
+    private const MAX_LOG_VALUE_LENGTH = 4096;
+
+    /**
+     * Do not let a scheduled task stay in "running" state indefinitely while SyncService is unavailable.
+     */
+    private const CONNECT_TIMEOUT_SECONDS = 10;
+
+    /**
+     * Upper bound for a single SyncService request from cron.
+     */
+    private const REQUEST_TIMEOUT_SECONDS = 120;
+
+    /**
      * Endpoint для отправки созданных курсов.
      */
     private const CREATED_COURSES_ENDPOINT = '/new-course';
@@ -64,7 +79,11 @@ class SyncService
         $payload = array_values($courses);
 
         mtrace('SyncService POST: ' . $url);
-        mtrace('SyncService payload: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        mtrace('SyncService payload courses count: ' . count($payload));
+        $this->trace_log_value(
+            'SyncService payload',
+            json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        );
 
         $curl = new \curl();
 
@@ -76,6 +95,8 @@ class SyncService
                 'Accept: application/json',
                 'X-Internal-API-Key: ' . $apikey,
             ],
+            'CURLOPT_CONNECTTIMEOUT' => self::CONNECT_TIMEOUT_SECONDS,
+            'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
         ];
 
         $response = $curl->post($url, $body, $options);
@@ -89,7 +110,7 @@ class SyncService
                 'tool_modeussync',
                 '',
                 null,
-                'SyncService returned HTTP ' . $httpcode . '. Response: ' . $response
+                'SyncService returned HTTP ' . $httpcode . '. Response: ' . $this->format_exception_value((string)$response)
             );
         }
 
@@ -98,7 +119,7 @@ class SyncService
         }
 
         mtrace('SyncService response HTTP code: ' . $httpcode);
-        mtrace('SyncService raw response: ' . ($response !== null ? $response : 'NULL'));
+        $this->trace_log_value('SyncService raw response', $response !== null ? (string)$response : 'NULL');
 
         $decoded = json_decode($response, true);
         return is_array($decoded) ? $decoded : ['raw' => $response];
@@ -132,7 +153,8 @@ class SyncService
         }
 
         mtrace('SyncService POST: ' . $url);
-        mtrace('SyncService payload: ' . $body);
+        mtrace('SyncService payload courses count: ' . count($payload));
+        $this->trace_log_value('SyncService payload', $body);
 
         $curl = new \curl();
 
@@ -144,6 +166,8 @@ class SyncService
                 'Accept: application/json',
                 'X-Internal-API-Key: ' . $apikey,
             ],
+            'CURLOPT_CONNECTTIMEOUT' => self::CONNECT_TIMEOUT_SECONDS,
+            'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
         ];
 
         $response = $curl->post($url, $body, $options);
@@ -152,7 +176,7 @@ class SyncService
         $httpcode = $info['http_code'] ?? null;
 
         mtrace('SyncService /sync response HTTP code: ' . $httpcode);
-        mtrace('SyncService /sync raw response: ' . ($response !== null ? $response : 'NULL'));
+        $this->trace_log_value('SyncService /sync raw response', $response !== null ? (string)$response : 'NULL');
 
         if ((int)$httpcode < 200 || (int)$httpcode >= 300) {
             throw new \moodle_exception(
@@ -160,7 +184,7 @@ class SyncService
                 'tool_modeussync',
                 '',
                 null,
-                'SyncService /sync returned HTTP ' . $httpcode . '. Response: ' . $response
+                'SyncService /sync returned HTTP ' . $httpcode . '. Response: ' . $this->format_exception_value((string)$response)
             );
         }
 
@@ -170,5 +194,33 @@ class SyncService
 
         $decoded = json_decode($response, true);
         return is_array($decoded) ? $decoded : ['raw' => $response];
+    }
+
+    private function trace_log_value(string $label, string $value): void
+    {
+        foreach ($this->format_log_value($label, $value) as $line) {
+            mtrace($line);
+        }
+    }
+
+    private function format_log_value(string $label, string $value): array
+    {
+        $length = strlen($value);
+
+        if ($length <= self::MAX_LOG_VALUE_LENGTH) {
+            return [$label . ': ' . $value];
+        }
+
+        return [
+            $label . ' length: ' . $length . ' bytes',
+            $label . ' preview: ' . \core_text::substr($value, 0, self::MAX_LOG_VALUE_LENGTH) . '... [truncated]',
+        ];
+    }
+
+    private function format_exception_value(string $value): string
+    {
+        $lines = $this->format_log_value('response', $value);
+
+        return implode(' ', $lines);
     }
 }
