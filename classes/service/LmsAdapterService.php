@@ -2,7 +2,7 @@
 
 namespace tool_modeussync\service;
 
-use GuzzleHttp\Exception\RequestException;
+use Packback\Lti1p3\Interfaces\IHttpException;
 
 // Сервис, получающий данные из LmsAdapter
 class LmsAdapterService
@@ -22,7 +22,7 @@ class LmsAdapterService
     {
         try {
             $response = $this->lmsHttpClient->httpGet("api/v1/lms/{$this->lmsId}/sync-sessions/last-closed", ['type' => $syncSessionType]);
-        } catch (RequestException $e) {
+        } catch (IHttpException $e) {
             $status = $e->getResponse()->getStatusCode();
             if ($status == 404) {
                 return null;
@@ -87,12 +87,6 @@ class LmsAdapterService
     {
         mtrace("Запрашиваем данные об участниках курсов из адаптера...");
         return $this->lmsHttpClient->httpGet("api/v1/lms/{$this->lmsId}/sync-sessions/{$sessionId}/sync/members", [])['body'];
-    }
-
-    public function saveMissingMembers(string $sessionId, object $requestBody)
-    {
-        mtrace("Отправляем в адаптер потерянных участников курсов...");
-        return $this->lmsHttpClient->httpPost("api/v1/lms/{$this->lmsId}/sync-sessions/{$sessionId}/sync/members/missing", [], $requestBody);
     }
 
     public function pushGrades(string $sessionId, object $requestBody)

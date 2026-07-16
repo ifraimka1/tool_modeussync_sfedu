@@ -20,6 +20,16 @@ class pull_courses extends base_sync_job
         return 'pull_courses';
     }
 
+    public function execute()
+    {
+        try {
+            parent::execute();
+        } catch (Throwable $e) {
+            $this->trace_throwable('Критическая ошибка задачи pull_courses', $e);
+            throw $e;
+        }
+    }
+
     public function do_work(array $currentSession, ?array $lastClosedSession): bool
     {
         $categoryId = get_config('tool_modeussync', 'default_category');
@@ -49,7 +59,7 @@ class pull_courses extends base_sync_job
                         $syncResponse = $syncService->send_created_courses($coursesBatch);
                     } catch (Throwable $e) {
                         $this->trace_throwable("Ошибка при отправке batch {$batchNumber}/{$batchCount} в SyncService", $e);
-                        continue;
+                        throw $e;
                     }
 
                     mtrace("Отправлены данные о курсах во внешний сервис, batch {$batchNumber}/{$batchCount}");
@@ -65,6 +75,7 @@ class pull_courses extends base_sync_job
                             mtrace("Ответ SyncService /sync batch {$batchNumber}/{$batchCount}: " . $this->format_log_value($this->encode_log_value($syncResponse)));
                         } catch (Throwable $e) {
                             $this->trace_throwable("Ошибка при отправке batch {$batchNumber}/{$batchCount} на endpoint /sync", $e);
+                            throw $e;
                         }
                     } else {
                         mtrace("Нет курсов для отправки на endpoint /sync, batch {$batchNumber}/{$batchCount}");
@@ -96,6 +107,7 @@ class pull_courses extends base_sync_job
             $fullname = $coursePrototype['name'];
             mtrace("");
             mtrace("Создаю курс [$fullname]...");
+            $transaction = null;
 
             try {
                 $idnumber = $coursePrototype['id'];
@@ -138,9 +150,13 @@ class pull_courses extends base_sync_job
 
                 mtrace("Создан курс [$fullname], id: ($courseId)");
             } catch (Throwable $e) {
-                mtrace("Ошибка при создании курса [$fullname]:");
                 $this->trace_throwable("Ошибка при создании/обработке курса [$fullname]", $e);
-                $DB->force_transaction_rollback();
+
+                if ($transaction !== null) {
+                    $transaction->rollback($e);
+                }
+
+                throw $e;
             }
         }
 
@@ -167,15 +183,13 @@ class pull_courses extends base_sync_job
         $updatedCourses = [];
 
         if (empty($response)) {
-            mtrace('Sync response is empty');
-            return $updatedCourses;
+            throw new \UnexpectedValueException('SyncService response is empty');
         }
 
         mtrace('Processing sync response...');
 
-        if (empty($response['results']) || !is_array($response['results'])) {
-            mtrace('Sync response does not contain results array');
-            return $updatedCourses;
+        if (!array_key_exists('results', $response) || !is_array($response['results'])) {
+            throw new \UnexpectedValueException('SyncService response does not contain results array');
         }
 
         mtrace('Sync response results count: ' . count($response['results']));
@@ -208,6 +222,7 @@ class pull_courses extends base_sync_job
                 mtrace('Exception message: ' . $e->getMessage());
                 mtrace('Exception file: ' . $e->getFile() . ':' . $e->getLine());
                 mtrace($e->getTraceAsString());
+                throw $e;
             }
         }
 
@@ -227,8 +242,11 @@ class pull_courses extends base_sync_job
         mtrace("Обрабатываю ответ SyncService для курса id_lms={$courseid}, courseDataCount={$courseDataCount}");
 
         if (!$success) {
-            mtrace("Пропускаю курс: success=false, id_lms={$courseid}");
-            return null;
+            $error = $courseResult['error'] ?? $courseResult['message'] ?? 'причина не указана';
+            throw new \UnexpectedValueException(
+                "SyncService вернул success=false для курса id_lms={$courseid}: " .
+                    $this->format_log_value($this->encode_log_value($error))
+            );
         }
 
         if (!$courseid) {
@@ -269,25 +287,19 @@ class pull_courses extends base_sync_job
         } else {
             mtrace("В курсе {$courseid} будут созданы задания: " . $this->format_assignment_ids_for_log($missingCourseData));
             $sectionnum = $this->get_or_create_modeus_assignments_section((int)$course->id);
-            $assignmentErrors = 0;
 
             foreach ($missingCourseData as $item) {
                 try {
                     $this->create_modeus_assignment((int)$course->id, $sectionnum, $item);
                 } catch (Throwable $e) {
-                    $assignmentErrors++;
                     $modeusitemid = trim((string)($item['id'] ?? ''));
                     $name = trim((string)($item['name'] ?? ''));
                     $this->trace_throwable(
                         "Ошибка при создании задания курса {$courseid}, Modeus id={$modeusitemid}, name={$name}",
                         $e
                     );
+                    throw $e;
                 }
-            }
-
-            if ($assignmentErrors > 0) {
-                mtrace("Курс {$courseid}: не отправляю на /sync из-за ошибок создания заданий: {$assignmentErrors}");
-                return null;
             }
         }
 
@@ -326,6 +338,9 @@ class pull_courses extends base_sync_job
         mtrace($context);
         mtrace('Exception class: ' . get_class($e));
         mtrace('Exception message: ' . $e->getMessage());
+        if ($e instanceof \moodle_exception && !empty($e->debuginfo)) {
+            mtrace('Exception debuginfo: ' . $e->debuginfo);
+        }
         mtrace('Exception file: ' . $e->getFile() . ':' . $e->getLine());
         mtrace('Exception trace: ' . $e->getTraceAsString());
     }
@@ -470,8 +485,9 @@ class pull_courses extends base_sync_job
         $grade = isset($item['grade']) ? (float)$item['grade'] : 0;
 
         if ($modeusitemid === '' || $name === '') {
-            mtrace('Пропускаю элемент курса: пустой id или name');
-            return;
+            throw new \UnexpectedValueException(
+                "Некорректное задание SyncService для курса {$courseid}: пустой id или name"
+            );
         }
 
         $sql = "SELECT cm.id

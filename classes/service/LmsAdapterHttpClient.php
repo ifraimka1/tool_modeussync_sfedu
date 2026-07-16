@@ -2,6 +2,7 @@
 
 namespace tool_modeussync\service;
 
+use enrol_lti\local\ltiadvantage\lib\http_client;
 use enrol_lti\local\ltiadvantage\lib\issuer_database;
 use enrol_lti\local\ltiadvantage\lib\launch_cache_session;
 use enrol_lti\local\ltiadvantage\repository\application_registration_repository;
@@ -11,7 +12,6 @@ use Packback\Lti1p3\LtiRegistration;
 use Packback\Lti1p3\LtiServiceConnector;
 use Packback\Lti1p3\ServiceRequest;
 use tool_modeussync\str_utils;
-use core\http_client;
 
 // Сервис, выполняющий запросы к LmsAdapter
 class LmsAdapterHttpClient
@@ -62,7 +62,7 @@ class LmsAdapterHttpClient
                     $appregistration->get_clientid()
                 );
                 $sesscache = new launch_cache_session();
-                $this->ltiConnector = new LtiServiceConnector($sesscache, new http_client());
+                $this->ltiConnector = new LtiServiceConnector($sesscache, new http_client(new \curl()));
                 $this->deploymentId = $deploymentId;
 
                 break;

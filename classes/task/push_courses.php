@@ -42,7 +42,7 @@ class push_courses extends base_sync_job
 
     private function getCoursesToPush($minimumUpdatedAt, ?int $lastSyncTime): array
     {
-        global $DB;
+        global $CFG, $DB;
 
         mtrace("Ищем курсы для отправки...");
         $fromSql = "
@@ -103,10 +103,9 @@ class push_courses extends base_sync_job
         return $courseModels;
     }
 
-
     public function getCourseModules($course)
     {
-        global $CFG;
+        global $CFG, $DB;
         require_once $CFG->dirroot . "/course/lib.php";
 
         $modinfo = get_fast_modinfo($course);
@@ -114,7 +113,7 @@ class push_courses extends base_sync_job
         $modinfosections = $modinfo->get_sections();
         $modules = array();
 
-        mtrace("Загружаем модули курса [$course->fullname] (id: $course->id)");
+        mtrace("Загружаем из БД модули курса [$course->fullname] (id: $course->id)");
 
         foreach ($sections as $key => $section) {
             if (!array_key_exists($section->section, $modinfosections)) {

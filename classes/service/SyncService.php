@@ -68,61 +68,7 @@ class SyncService
             return [];
         }
 
-        $apikey = trim((string)get_config('tool_modeussync', 'internal_api_key'));
-
-        if ($apikey === '') {
-            throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
-        }
-
-        $url = $this->get_base_url() . self::CREATED_COURSES_ENDPOINT;
-
-        $payload = array_values($courses);
-
-        mtrace('SyncService POST: ' . $url);
-        mtrace('SyncService payload courses count: ' . count($payload));
-        $this->trace_log_value(
-            'SyncService payload',
-            json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
-        );
-
-        $curl = new \curl();
-
-        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-        $options = [
-            'CURLOPT_HTTPHEADER' => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'X-Internal-API-Key: ' . $apikey,
-            ],
-            'CURLOPT_CONNECTTIMEOUT' => self::CONNECT_TIMEOUT_SECONDS,
-            'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
-        ];
-
-        $response = $curl->post($url, $body, $options);
-
-        $info = $curl->get_info();
-        $httpcode = $info['http_code'] ?? null;
-
-        if ((int)$httpcode < 200 || (int)$httpcode >= 300) {
-            throw new \moodle_exception(
-                'syncservicepostfailed',
-                'tool_modeussync',
-                '',
-                null,
-                'SyncService returned HTTP ' . $httpcode . '. Response: ' . $this->format_exception_value((string)$response)
-            );
-        }
-
-        if ($response === '' || $response === null) {
-            return [];
-        }
-
-        mtrace('SyncService response HTTP code: ' . $httpcode);
-        $this->trace_log_value('SyncService raw response', $response !== null ? (string)$response : 'NULL');
-
-        $decoded = json_decode($response, true);
-        return is_array($decoded) ? $decoded : ['raw' => $response];
+        return $this->post_courses(self::CREATED_COURSES_ENDPOINT, $courses, true);
     }
 
     public function send_sync_courses(array $courses): array
@@ -132,19 +78,43 @@ class SyncService
             return [];
         }
 
+        return $this->post_courses(self::SYNC_ENDPOINT, $courses, false);
+    }
+
+    /**
+     * Creates the Moodle HTTP client.
+     *
+     * @return \curl
+     */
+    protected function create_curl(): \curl
+    {
+        return new \curl();
+    }
+
+    /**
+     * Sends a JSON request to SyncService and validates the response.
+     *
+     * @param string $endpoint
+     * @param array $courses
+     * @param bool $resultsrequired
+     * @return array
+     * @throws \moodle_exception
+     */
+    private function post_courses(string $endpoint, array $courses, bool $resultsrequired): array
+    {
         $apikey = trim((string)get_config('tool_modeussync', 'internal_api_key'));
 
         if ($apikey === '') {
             throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
         }
 
-        $url = $this->get_base_url() . self::SYNC_ENDPOINT;
+        $url = $this->get_base_url() . $endpoint;
         $payload = array_values($courses);
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         if ($body === false) {
             throw new \moodle_exception(
-                'jsonencodefailed',
+                'syncrequestfailed',
                 'tool_modeussync',
                 '',
                 null,
@@ -156,9 +126,7 @@ class SyncService
         mtrace('SyncService payload courses count: ' . count($payload));
         $this->trace_log_value('SyncService payload', $body);
 
-        $curl = new \curl();
-
-        $body = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $curl = $this->create_curl();
 
         $options = [
             'CURLOPT_HTTPHEADER' => [
@@ -170,30 +138,110 @@ class SyncService
             'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
         ];
 
-        $response = $curl->post($url, $body, $options);
+        try {
+            $response = $curl->post($url, $body, $options);
+        } catch (\Throwable $e) {
+            mtrace(
+                'SyncService ' . $endpoint . ' request threw ' . get_class($e) . ': ' . $e->getMessage()
+            );
+            throw $e;
+        }
 
         $info = $curl->get_info();
         $httpcode = $info['http_code'] ?? null;
+        $errno = (int)$curl->get_errno();
 
-        mtrace('SyncService /sync response HTTP code: ' . $httpcode);
-        $this->trace_log_value('SyncService /sync raw response', $response !== null ? (string)$response : 'NULL');
+        if ($errno !== 0) {
+            $curlerror = trim((string)($curl->error ?? ''));
+            $message = 'cURL error ' . $errno . ($curlerror === '' ? '' : ': ' . $curlerror);
+
+            mtrace('SyncService ' . $endpoint . ' ' . $message);
+            mtrace('SyncService ' . $endpoint . ' HTTP code: ' . ($httpcode ?? 'unknown'));
+            $this->trace_log_value(
+                'SyncService ' . $endpoint . ' raw response',
+                $response !== null ? (string)$response : 'NULL'
+            );
+
+            throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null, $message);
+        }
 
         if ((int)$httpcode < 200 || (int)$httpcode >= 300) {
+            $this->trace_http_error_response('SyncService ' . $endpoint . ' response', $httpcode, $response);
+
             throw new \moodle_exception(
-                'syncservicepostfailed',
+                'syncrequestfailed',
                 'tool_modeussync',
                 '',
                 null,
-                'SyncService /sync returned HTTP ' . $httpcode . '. Response: ' . $this->format_exception_value((string)$response)
+                $this->format_http_error_message(
+                    'SyncService ' . $endpoint . ' returned',
+                    $httpcode,
+                    (string)$response
+                )
             );
         }
 
+        mtrace('SyncService ' . $endpoint . ' response HTTP code: ' . $httpcode);
+        $this->trace_log_value(
+            'SyncService ' . $endpoint . ' raw response',
+            $response !== null ? (string)$response : 'NULL'
+        );
+
+        return $this->decode_response($endpoint, $response, $resultsrequired);
+    }
+
+    /**
+     * Decodes and validates a successful SyncService response.
+     *
+     * @param string $endpoint
+     * @param mixed $response
+     * @param bool $resultsrequired
+     * @return array
+     * @throws \moodle_exception
+     */
+    private function decode_response(string $endpoint, $response, bool $resultsrequired): array
+    {
         if ($response === '' || $response === null) {
-            return [];
+            if (!$resultsrequired) {
+                return [];
+            }
+
+            throw new \moodle_exception(
+                'syncrequestfailed',
+                'tool_modeussync',
+                '',
+                null,
+                'SyncService ' . $endpoint . ' returned an empty response'
+            );
         }
 
-        $decoded = json_decode($response, true);
-        return is_array($decoded) ? $decoded : ['raw' => $response];
+        $decoded = json_decode((string)$response, true);
+
+        if (!is_array($decoded) || json_last_error() !== JSON_ERROR_NONE) {
+            throw new \moodle_exception(
+                'syncrequestfailed',
+                'tool_modeussync',
+                '',
+                null,
+                'SyncService ' . $endpoint . ' returned invalid JSON: ' . json_last_error_msg() . '. ' .
+                    $this->format_exception_value((string)$response)
+            );
+        }
+
+        $hasresults = array_key_exists('results', $decoded) && is_array($decoded['results']);
+
+        if ($resultsrequired && !$hasresults) {
+            throw new \moodle_exception(
+                'syncrequestfailed',
+                'tool_modeussync',
+                '',
+                null,
+                'SyncService ' . $endpoint . ' response does not contain a results array. ' .
+                    $this->format_exception_value((string)$response)
+            );
+        }
+
+        return $decoded;
     }
 
     private function trace_log_value(string $label, string $value): void
@@ -201,6 +249,12 @@ class SyncService
         foreach ($this->format_log_value($label, $value) as $line) {
             mtrace($line);
         }
+    }
+
+    private function trace_http_error_response(string $label, $httpcode, $response): void
+    {
+        mtrace($label . ' HTTP error code: ' . ($httpcode ?? 'unknown'));
+        $this->trace_log_value($label . ' server message', $response !== null ? (string)$response : 'NULL');
     }
 
     private function format_log_value(string $label, string $value): array
@@ -222,5 +276,11 @@ class SyncService
         $lines = $this->format_log_value('response', $value);
 
         return implode(' ', $lines);
+    }
+
+    private function format_http_error_message(string $prefix, $httpcode, string $response): string
+    {
+        return $prefix . ' HTTP ' . ($httpcode ?? 'unknown') . '. Response: ' .
+            $this->format_exception_value($response);
     }
 }

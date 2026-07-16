@@ -55,7 +55,7 @@ class push_grades extends base_sync_job
         mtrace("Ищем измененные оценки...");
         $selectSql = "SELECT gg.id,
        cm.id cmid,
-       gi.courseid course,
+       cm.course,
        gi.id giid,
        gi.grademax,
        gi.grademin,
@@ -65,29 +65,33 @@ class push_grades extends base_sync_job
        gg.usermodified,
        gg.overridden,
        gg.timecreated,
-       gg.timemodified,
-       gi.itemtype
+       gg.timemodified
 FROM {grade_grades} gg
-     INNER JOIN {grade_items} gi ON gi.id = gg.itemid
-     LEFT JOIN {modules} M ON M.name = gi.itemmodule
-     LEFT JOIN {course_modules} cm
-                ON cm.course = gi.courseid AND cm.module = M.id AND cm.instance = gi.iteminstance
-     LEFT JOIN (
-         SELECT DISTINCT gi.courseid, gi.itemmodule, gi.iteminstance, gg.userid, TRUE AS matched_item_found
-         FROM {grade_grades} gg
-         INNER JOIN {grade_items} gi ON gg.itemid = gi.id
-         WHERE ((gg.overridden >= :last_sync_date1 AND gg.overridden != 0) OR
-               (gg.timemodified IS NOT NULL AND gg.timemodified >= :last_sync_date2))
-           AND (gi.itemtype = 'mod' OR gi.itemtype = 'course' OR gi.itemtype = 'category' OR gi.itemtype = 'manual')
-           AND gg.finalgrade IS NOT NULL
-     ) matched_grade_items
-     ON gi.courseid = matched_grade_items.courseid AND
-        (gi.itemmodule IS NULL OR gi.itemmodule = matched_grade_items.itemmodule) AND
-        (gi.iteminstance IS NULL OR gi.iteminstance = matched_grade_items.iteminstance) AND
-        gg.userid = matched_grade_items.userid 
-WHERE (gi.itemtype = 'mod' OR gi.itemtype = 'course' OR gi.itemtype = 'category' OR gi.itemtype = 'manual') AND
-    (matched_item_found OR $resync_courses_condition_sql)
-ORDER BY gg.id";
+         INNER JOIN {grade_items} gi
+                    ON gi.id = gg.itemid
+         INNER JOIN {modules} M ON M.name = gi.itemmodule
+         INNER JOIN {course_modules} cm
+                    ON cm.course = gi.courseid AND cm.module = M.id AND cm.instance = gi.iteminstance
+    -- Отбираем оценки для модулей, для которых есть хотя бы одна измененная оценка в любом grade_item: 
+         LEFT JOIN (SELECT DISTINCT gi.courseid, gi.itemmodule, gi.iteminstance, gg.userid, TRUE AS matched_item_found
+                     FROM {grade_grades} gg
+                              INNER JOIN {grade_items} gi ON gg.itemid = gi.id
+                     WHERE ((gg.overridden >= :last_sync_date1 AND gg.overridden != 0) OR
+                            (gg.timemodified IS NOT NULL AND gg.timemodified >= :last_sync_date2))
+                       AND gi.itemtype = 'mod'
+                       -- удаленные оценки синхронизируются только по запросу:
+                       AND gg.finalgrade IS NOT NULL) matched_grade_items
+                    ON gi.courseid = matched_grade_items.courseid AND
+                       gi.itemmodule = matched_grade_items.itemmodule AND
+                       gi.iteminstance = matched_grade_items.iteminstance AND
+                       gg.userid = matched_grade_items.userid 
+WHERE gi.itemtype = 'mod' AND
+    (matched_item_found
+    -- если для курса запрошена полная пересинхронизация:
+    OR $resync_courses_condition_sql)
+-- Сортируем для стабильности в логах:
+ORDER BY gg.id
+        ";
         $grades = $DB->get_records_sql($selectSql, $queryParams);
         $gradesCount = count($grades);
         mtrace("Найдено {$gradesCount} измененных оценок.");
@@ -100,22 +104,16 @@ ORDER BY gg.id";
         $gradeModels = [];
         $gradeModel = null;
         $users_repository = new users_repository();
-        $userIds = [];
-        foreach ($grades as $grade) {
-            $userIds[] = $grade->userid;
-            if ($grade->usermodified != null) {
-                $userIds[] = $grade->usermodified;
-            }
-        }
-        $toExternalMap = $users_repository->toExternalIdMap_OneToOne($userIds);
+        $userIdGetter = $users_repository->getUserExternalIdGetter();
+
         // Последовательно обрабатываем оценки, предварительно отсортированные для группировки
         mtrace("Обрабатываем исходные оценки:");
         foreach ($grades as $grade) {
             mtrace("Оценка id:{$grade->id} courseid:{$grade->course} cmid:{$grade->cmid} giid:{$grade->giid} userid:{$grade->userid}");
-            $gradeExternalStudentPersonId = $toExternalMap[$grade->userid];
-            $gradeExternalTeacherPersonId = $grade->usermodified === null ? null : $toExternalMap[$grade->usermodified];
+            $gradeExternalStudentPersonId = $userIdGetter($grade->userid);
+            $gradeExternalTeacherPersonId = $grade->usermodified === null ? null : $userIdGetter($grade->usermodified);
 
-            if ($gradeExternalStudentPersonId == null) {
+            if (!$gradeExternalStudentPersonId) {
                 mtrace("Не удалось найти сквозной идентификатор для студента {$grade->userid}. Оценка {$grade->id} будет пропущена");
                 continue;
             }
@@ -124,7 +122,7 @@ ORDER BY gg.id";
             $gradeModel = new \stdClass;
             $gradeModel->Id = $grade->id;
             $gradeModel->CourseId = $grade->course;
-            $gradeModel->ModuleId = $grade->cmid ?? "grade_item_{$grade->giid}";
+            $gradeModel->ModuleId = $grade->cmid;
             $gradeModel->ScaleId = $grade->scaleid;
             $gradeModel->GradeItemId = $grade->giid;
             $gradeModel->Value = $grade->finalgrade;
@@ -138,9 +136,13 @@ ORDER BY gg.id";
 
             $gradeModels[] = &$gradeModel;
         }
+        mtrace("");
 
         $request = new \stdClass;
         $request->Grades = $gradeModels;
+
+        // mtrace("Запрос в адаптер в формате json:");
+        // mtrace(json_encode($request, JSON_PRETTY_PRINT));
 
         return $request;
     }
