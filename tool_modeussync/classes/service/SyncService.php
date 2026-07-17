@@ -2,10 +2,20 @@
 
 namespace tool_modeussync\service;
 
+use tool_modeussync\service\logger\cron_logger;
+use tool_modeussync\service\logger\logger_interface;
+use tool_modeussync\service\logger\web_logger;
+
 defined('MOODLE_INTERNAL') || die();
 
 class SyncService
 {
+    /** @var logger_interface */
+    private $logger;
+
+    /** @var array Exact credentials removed from every diagnostic message. */
+    private $secrets = [];
+
     /**
      * Maximum amount of request/response body bytes written to Moodle task logs.
      */
@@ -30,6 +40,21 @@ class SyncService
      * Endpoint для отправки курсов, в которых сгенерились задания.
      */
     private const SYNC_ENDPOINT = '/sync';
+
+    /**
+     * @param logger_interface|null $logger Explicit logger, or a context-safe default.
+     */
+    public function __construct(?logger_interface $logger = null)
+    {
+        if ($logger !== null) {
+            $this->logger = $logger;
+            return;
+        }
+
+        $this->logger = defined('CLI_SCRIPT') && CLI_SCRIPT
+            ? new cron_logger()
+            : new web_logger();
+    }
 
     private function get_base_url(): string
     {
@@ -64,7 +89,7 @@ class SyncService
     public function send_created_courses(array $courses): array
     {
         if (empty($courses)) {
-            mtrace('SyncService: нет курсов для отправки');
+            $this->log('SyncService: нет курсов для отправки');
             return [];
         }
 
@@ -74,7 +99,7 @@ class SyncService
     public function send_sync_courses(array $courses): array
     {
         if (empty($courses)) {
-            mtrace('SyncService: нет курсов для отправки на /sync');
+            $this->log('SyncService: нет курсов для отправки на /sync');
             return [];
         }
 
@@ -107,6 +132,7 @@ class SyncService
         if ($apikey === '') {
             throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
         }
+        $this->secrets = [$apikey];
 
         $url = $this->get_base_url() . $endpoint;
         $payload = array_values($courses);
@@ -122,8 +148,8 @@ class SyncService
             );
         }
 
-        mtrace('SyncService POST: ' . $url);
-        mtrace('SyncService payload courses count: ' . count($payload));
+        $this->log('SyncService POST: ' . $url);
+        $this->log('SyncService payload courses count: ' . count($payload));
         $this->trace_log_value('SyncService payload', $body);
 
         $curl = $this->create_curl();
@@ -141,10 +167,15 @@ class SyncService
         try {
             $response = $curl->post($url, $body, $options);
         } catch (\Throwable $e) {
-            mtrace(
-                'SyncService ' . $endpoint . ' request threw ' . get_class($e) . ': ' . $e->getMessage()
+            $safeerror = $this->redact_secrets($e->getMessage());
+            $this->log('SyncService ' . $endpoint . ' request threw ' . get_class($e) . ': ' . $safeerror);
+            throw new \moodle_exception(
+                'syncrequestfailed',
+                'tool_modeussync',
+                '',
+                null,
+                'SyncService ' . $endpoint . ' request failed: ' . $safeerror
             );
-            throw $e;
         }
 
         $info = $curl->get_info();
@@ -153,10 +184,12 @@ class SyncService
 
         if ($errno !== 0) {
             $curlerror = trim((string)($curl->error ?? ''));
-            $message = 'cURL error ' . $errno . ($curlerror === '' ? '' : ': ' . $curlerror);
+            $message = $this->redact_secrets(
+                'cURL error ' . $errno . ($curlerror === '' ? '' : ': ' . $curlerror)
+            );
 
-            mtrace('SyncService ' . $endpoint . ' ' . $message);
-            mtrace('SyncService ' . $endpoint . ' HTTP code: ' . ($httpcode ?? 'unknown'));
+            $this->log('SyncService ' . $endpoint . ' ' . $message);
+            $this->log('SyncService ' . $endpoint . ' HTTP code: ' . ($httpcode ?? 'unknown'));
             $this->trace_log_value(
                 'SyncService ' . $endpoint . ' raw response',
                 $response !== null ? (string)$response : 'NULL'
@@ -181,7 +214,7 @@ class SyncService
             );
         }
 
-        mtrace('SyncService ' . $endpoint . ' response HTTP code: ' . $httpcode);
+        $this->log('SyncService ' . $endpoint . ' response HTTP code: ' . $httpcode);
         $this->trace_log_value(
             'SyncService ' . $endpoint . ' raw response',
             $response !== null ? (string)$response : 'NULL'
@@ -247,18 +280,19 @@ class SyncService
     private function trace_log_value(string $label, string $value): void
     {
         foreach ($this->format_log_value($label, $value) as $line) {
-            mtrace($line);
+            $this->log($line);
         }
     }
 
     private function trace_http_error_response(string $label, $httpcode, $response): void
     {
-        mtrace($label . ' HTTP error code: ' . ($httpcode ?? 'unknown'));
+        $this->log($label . ' HTTP error code: ' . ($httpcode ?? 'unknown'));
         $this->trace_log_value($label . ' server message', $response !== null ? (string)$response : 'NULL');
     }
 
     private function format_log_value(string $label, string $value): array
     {
+        $value = $this->redact_secrets($value);
         $length = strlen($value);
 
         if ($length <= self::MAX_LOG_VALUE_LENGTH) {
@@ -267,7 +301,7 @@ class SyncService
 
         return [
             $label . ' length: ' . $length . ' bytes',
-            $label . ' preview: ' . \core_text::substr($value, 0, self::MAX_LOG_VALUE_LENGTH) . '... [truncated]',
+            $label . ' preview: ' . mb_strcut($value, 0, self::MAX_LOG_VALUE_LENGTH, 'UTF-8') . '... [truncated]',
         ];
     }
 
@@ -282,5 +316,21 @@ class SyncService
     {
         return $prefix . ' HTTP ' . ($httpcode ?? 'unknown') . '. Response: ' .
             $this->format_exception_value($response);
+    }
+
+    private function log(string $message): void
+    {
+        $this->logger->log($this->redact_secrets($message));
+    }
+
+    private function redact_secrets(string $value): string
+    {
+        foreach ($this->secrets as $secret) {
+            if ($secret !== '') {
+                $value = str_replace($secret, '[redacted]', $value);
+            }
+        }
+
+        return $value;
     }
 }

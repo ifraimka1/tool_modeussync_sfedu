@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="admin/tool/modeussync/db" VERSION="20260716" COMMENT="XMLDB file for Moodle tool_modeussync plugin"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd">
+    <TABLES>
+        <TABLE NAME="tool_modeussync_course_queue" COMMENT="Persistent queue state for a course.">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="idmodeus" TYPE="char" LENGTH="255" NOTNULL="true"/>
+                <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending"/>
+                <FIELD NAME="lasterror" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="timesynced" TYPE="int" LENGTH="10" NOTNULL="false"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="course_fk" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="course_uix" UNIQUE="true" FIELDS="courseid"/>
+                <INDEX NAME="status_ix" UNIQUE="false" FIELDS="status"/>
+            </INDEXES>
+        </TABLE>
+        <TABLE NAME="tool_modeussync_queue_items" COMMENT="Persistent queue items for activities.">
+            <FIELDS>
+                <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+                <FIELD NAME="queueid" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="externalid" TYPE="char" LENGTH="255" NOTNULL="true"/>
+                <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true"/>
+                <FIELD NAME="maxgrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true"/>
+                <FIELD NAME="targetmodule" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="assign"/>
+                <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending"/>
+                <FIELD NAME="coursemoduleid" TYPE="int" LENGTH="10" NOTNULL="false"/>
+                <FIELD NAME="createdby" TYPE="int" LENGTH="10" NOTNULL="false"/>
+                <FIELD NAME="lasterror" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="payloadjson" TYPE="text" NOTNULL="false"/>
+                <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true"/>
+                <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true"/>
+            </FIELDS>
+            <KEYS>
+                <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+                <KEY NAME="queue_fk" TYPE="foreign" FIELDS="queueid" REFTABLE="tool_modeussync_course_queue" REFFIELDS="id"/>
+                <KEY NAME="coursemodule_fk" TYPE="foreign" FIELDS="coursemoduleid" REFTABLE="course_modules" REFFIELDS="id"/>
+                <KEY NAME="createdby_fk" TYPE="foreign" FIELDS="createdby" REFTABLE="user" REFFIELDS="id"/>
+            </KEYS>
+            <INDEXES>
+                <INDEX NAME="queueexternal_uix" UNIQUE="true" FIELDS="queueid, externalid"/>
+                <INDEX NAME="queuestatus_ix" UNIQUE="false" FIELDS="queueid, status"/>
+            </INDEXES>
+        </TABLE>
+    </TABLES>
+</XMLDB>
