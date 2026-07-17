@@ -122,6 +122,13 @@ class push_courses extends base_sync_job
 
             foreach ($modinfosections[$section->section] as $courseModuleId) {
                 $courseModuleInfo = $modinfo->cms[$courseModuleId];
+                if (in_array(
+                    $courseModuleInfo->modname,
+                    courses_consts::$non_exportable_module_types,
+                    true
+                )) {
+                    continue;
+                }
                 $modules[] = [
                     'id' => $courseModuleInfo->id,
                     'lmsIdNumber' => $courseModuleInfo->idnumber,
@@ -195,6 +202,9 @@ class push_courses extends base_sync_job
 
             $moduleTypeInfos = array();
             foreach ($types as $moduleType) {
+                if (in_array($moduleType->name, courses_consts::$non_exportable_module_types, true)) {
+                    continue;
+                }
                 $moduleTypeinfo = array();
                 $moduleTypeinfo['id'] = $moduleType->name;
                 $moduleTypeinfo['name'] = $this->get_module_label($moduleType->name);
