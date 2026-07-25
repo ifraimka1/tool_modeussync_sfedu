@@ -1,0 +1,37 @@
+<?php
+
+$string['pluginname'] = 'Синхронизация с Modeus';
+$string['auto_publish_as_lti_tools'] = 'Публиковать новые курсы и элементы как инструменты LTI';
+$string['manage'] = 'Расширения Custis LTI';
+$string['start_lti_sync'] = 'Запустить синхронизацию участников и оценок с LTI-платформами';
+$string['push_courses'] = 'Передать сведения о курсах и их элементах в LTI-платформы';
+$string['pull_courses'] = 'Создать курсы по данным LTI-платформ';
+$string['sync_user'] = 'Пользователь, запускающий синхронизацию LTI';
+$string['sync_user_descr'] = 'Этот пользователь будет зачислен на курс как преподаватель для запуска синхронизации через LTI. После выполнения задачи sync_members пользователь будет удалён с курса.';
+$string['auto_link_users'] = 'Регистрировать пользователей Moodle в LTI';
+$string['provisioningmode'] = 'Режим предоставления доступа. Внимание: изменение влияет только на новые инструменты LTI.';
+$string['platform_settings'] = 'Дополнительные настройки интеграции через LTI';
+$string['platform_settings_descr'] = 'Формат JSON, обязательно с двойными кавычками: { "deploymentid": { "lmsapi": "url" }}';
+$string['common'] = 'Общие настройки расширений LTI';
+$string['lang'] = 'Язык публикации инструмента LTI';
+$string['lang_descr'] = 'Используйте только установленные в Moodle языки. Внимание: изменение влияет только на новые инструменты LTI.';
+$string['lti_field_user_id'] = 'Поле с идентификатором пользователя LTI';
+$string['lti_field_user_id_descr'] = 'Поле используется для синхронизации пользователей и оценок с LTI-платформой. Изменение корректно свяжет только новых пользователей; существующие сохранят прежнюю связь.';
+$string['default_category'] = 'Категория для создаваемых курсов';
+$string['default_category_descr'] = 'Курсы, созданные по данным платформы, будут помещены в эту категорию.';
+$string['syncservicebaseurlnotset'] = 'Базовый URL SyncService не настроен.';
+$string['syncservice_base_url'] = 'URL SyncService';
+$string['syncservice_base_url_desc'] = 'Базовый домен или IP-адрес SyncService, например https://www.syncservice.com/';
+$string['internal_api_key'] = 'Внутренний API-ключ';
+$string['internal_api_key_desc'] = 'API-ключ для запросов к SyncService.';
+$string['missinginternalapikey'] = 'Внутренний API-ключ не настроен.';
+$string['syncrequestfailed'] = 'Запрос к SyncService завершился ошибкой.';
+$string['invalidassignmentname'] = 'Некорректное задание';
+$string['invalidassignmentpayload'] = 'В данных задания отсутствует корректный идентификатор, название или положительная максимальная оценка.';
+$string['unsupportedmodule'] = 'Выбранный тип элемента не поддерживается.';
+$string['moduleidnumberconflict'] = 'На курсе уже существует элемент с этим идентификатором Modeus, но другого типа.';
+$string['eventassignmentsqueued'] = 'Задания добавлены в очередь';
+$string['cannotacquirequeuelock'] = 'Не удалось получить блокировку очереди Modeus.';
+$string['privacy:metadata:queueitems'] = 'Элементы очереди заданий, созданные вручную пользователем Moodle.';
+$string['privacy:metadata:queueitems:createdby'] = 'Пользователь, подтвердивший создание элемента Moodle.';
+$string['privacy:exportpath'] = 'Создание заданий Modeus';

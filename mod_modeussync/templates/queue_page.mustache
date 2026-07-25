@@ -1,0 +1,35 @@
+<div class="mod-modeussync">
+    <div class="mb-3 text-muted">{{queuestatus}}</div>
+    <form method="post" action="{{actionurl}}">
+        <input type="hidden" name="sesskey" value="{{sesskey}}">
+        <input type="hidden" name="action" value="create">
+        <div class="mod-modeussync-queue">
+            {{#items}}
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <div class="mr-3">
+                        <div class="font-weight-bold">{{name}}</div>
+                        <div class="text-muted">{{#str}}maxgrade, mod_modeussync{{/str}}: {{maxgrade}}</div>
+                        <div>{{statuslabel}}</div>
+                        {{#error}}<div class="text-danger">{{error}}</div>{{/error}}
+                        {{#activityurl}}
+                            <a href="{{activityurl}}">{{#str}}openactivity, mod_modeussync{{/str}}</a>
+                        {{/activityurl}}
+                    </div>
+                    <select name="targetmodule[{{id}}]" class="custom-select" {{#disabled}}disabled{{/disabled}}>
+                        <option value="assign" {{#selectedassign}}selected{{/selectedassign}}>
+                            {{#str}}typeassign, mod_modeussync{{/str}}
+                        </option>
+                        <option value="quiz" {{#selectedquiz}}selected{{/selectedquiz}}>
+                            {{#str}}typequiz, mod_modeussync{{/str}}
+                        </option>
+                    </select>
+                </div>
+            {{/items}}
+        </div>
+        {{#canmanage}}
+            <button type="submit" class="btn btn-primary" {{#buttondisabled}}disabled{{/buttondisabled}}>
+                {{buttonlabel}}
+            </button>
+        {{/canmanage}}
+    </form>
+</div>
