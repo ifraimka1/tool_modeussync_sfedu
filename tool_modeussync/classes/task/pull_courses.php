@@ -43,13 +43,16 @@ class pull_courses extends base_sync_job
         $prototypes = $this->lmsAdapterService->getCoursesToCreate($currentSession['id']);
         mtrace("Получено курсов из первого запроса: " . count($prototypes));
 
+        $hadCourseCreationFailures = false;
         if (count($prototypes) != 0) {
-            $coursesForSync = $this->create_courses($prototypes, $categoryId);
+            $creationResult = $this->create_courses($prototypes, (int) $categoryId);
+            $coursesForSync = $creationResult['courses'];
+            $hadCourseCreationFailures = $creationResult['failed'];
 
             mtrace("Всего курсов для отправки в SyncService: " . count($coursesForSync));
 
             if (!empty($coursesForSync)) {
-                $syncService = new SyncService();
+                $syncService = $this->create_sync_service();
                 $batches = array_chunk($coursesForSync, self::SYNC_COURSES_BATCH_SIZE);
                 $batchCount = count($batches);
 
@@ -79,12 +82,12 @@ class pull_courses extends base_sync_job
             mtrace("Нет курсов для обработки из первого запроса");
         }
 
-        return true;
+        return !$hadCourseCreationFailures;
     }
 
-    private function create_courses($courses, $categoryId)
+    protected function create_courses(array $courses, int $categoryId): array
     {
-        global $CFG, $DB;
+        global $CFG;
         require_once $CFG->dirroot . "/course/lib.php";
         require_once $CFG->libdir . '/completionlib.php';
 
@@ -96,11 +99,11 @@ class pull_courses extends base_sync_job
         $existingCourses = courses_repository::get_courses_by_idnumbers($idnumbers);
 
         $resultcourses = array();
+        $failed = false;
         foreach ($courses as $coursePrototype) {
             $fullname = $coursePrototype['name'];
             mtrace("");
             mtrace("Создаю курс [$fullname]...");
-            $transaction = null;
 
             try {
                 $idnumber = $coursePrototype['id'];
@@ -123,11 +126,7 @@ class pull_courses extends base_sync_job
                     continue;
                 }
 
-                $course = $this->createCourse($coursePrototype, $categoryId);
-                $transaction = $DB->start_delegated_transaction();
-                $courseId = create_course((object) $course)->id;
-
-                $this->create_sections($coursePrototype['sections'], $courseId);
+                $courseId = $this->create_course_transactionally($coursePrototype, $categoryId);
 
                 if ($idModeus === null) {
                     mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
@@ -139,21 +138,39 @@ class pull_courses extends base_sync_job
                     'id_lms' => $courseId,
                     'id_modeus' => $idModeus,
                 );
-                $transaction->allow_commit();
 
                 mtrace("Создан курс [$fullname], id: ($courseId)");
             } catch (Throwable $e) {
                 $this->trace_throwable("Ошибка при создании/обработке курса [$fullname]", $e);
-
-                if ($transaction !== null) {
-                    $transaction->rollback($e);
-                }
-
-                throw $e;
+                $failed = true;
+                continue;
             }
         }
 
-        return $resultcourses;
+        return ['courses' => $resultcourses, 'failed' => $failed];
+    }
+
+    /**
+     * Creates one course inside its own delegated transaction.
+     *
+     * Moodle's rollback() rethrows the supplied exception. Keeping this boundary in a
+     * helper lets create_courses() catch that rethrow and continue with the next course.
+     */
+    private function create_course_transactionally(array $coursePrototype, int $categoryId): int
+    {
+        global $DB;
+
+        $transaction = $DB->start_delegated_transaction();
+        try {
+            $course = $this->createCourse($coursePrototype, $categoryId);
+            $courseId = (int) create_course((object) $course)->id;
+            $this->create_sections($coursePrototype['sections'], $courseId);
+            $transaction->allow_commit();
+            return $courseId;
+        } catch (Throwable $e) {
+            $transaction->rollback($e);
+            throw $e;
+        }
     }
 
     private function extract_modeus_id_from_summary(?string $summary): ?string
@@ -174,6 +191,11 @@ class pull_courses extends base_sync_job
     protected function create_sync_response_ingestor(): sync_response_ingestor
     {
         return new sync_response_ingestor(new queue_repository());
+    }
+
+    protected function create_sync_service(): SyncService
+    {
+        return new SyncService();
     }
 
     protected function process_sync_response(array $response): array
