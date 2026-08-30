@@ -63,10 +63,12 @@ final class assign_factory_test extends advanced_testcase {
         $this->resetAfterTest();
         $assign = new stub_activity_factory();
         $quiz = new stub_activity_factory();
-        $registry = new factory_registry($assign, $quiz);
+        $workshop = new stub_activity_factory();
+        $registry = new factory_registry($assign, $quiz, $workshop);
 
         $this->assertSame($assign, $registry->get(target_module::ASSIGN));
         $this->assertSame($quiz, $registry->get(target_module::QUIZ));
+        $this->assertSame($workshop, $registry->get(target_module::WORKSHOP));
     }
 
     public function test_registry_rejects_unsupported_module(): void {

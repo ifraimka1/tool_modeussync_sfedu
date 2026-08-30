@@ -183,6 +183,33 @@ final class view_access_test extends advanced_testcase {
         $this->assertSame(get_string('retrycreation', 'mod_modeussync'), $missingexport->buttonlabel);
     }
 
+    public function test_output_exposes_workshop_selection(): void {
+        global $PAGE;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        [$item] = $repository->upsert_item($queue->id, [
+            'id' => 'workshop-1',
+            'name' => 'Проектный семинар',
+            'grade' => 50,
+        ]);
+        $repository->save_target_modules($queue->id, [$item->id => target_module::WORKSHOP]);
+        $PAGE->set_context(context_course::instance($course->id));
+
+        $export = (new queue_page(
+            $queue,
+            [$repository->get_item($item->id)],
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ))->export_for_template($PAGE->get_renderer('core'));
+
+        $this->assertTrue($export->items[0]['selectedworkshop']);
+        $this->assertFalse($export->items[0]['selectedassign']);
+        $this->assertFalse($export->items[0]['selectedquiz']);
+    }
+
     /** @return array [course, cm]. */
     private function course_module(): array {
         $this->resetAfterTest();

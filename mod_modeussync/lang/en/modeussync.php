@@ -29,6 +29,7 @@ $string['maxgrade'] = 'Maximum grade';
 $string['openactivity'] = 'Open activity';
 $string['typeassign'] = 'Assignment';
 $string['typequiz'] = 'Quiz';
+$string['typeworkshop'] = 'Workshop';
 $string['createactivities'] = 'Create';
 $string['create'] = 'Create';
 $string['retrycreation'] = 'Retry creation';

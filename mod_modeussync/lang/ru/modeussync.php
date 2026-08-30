@@ -29,6 +29,7 @@ $string['maxgrade'] = 'Максимальная оценка';
 $string['openactivity'] = 'Открыть элемент';
 $string['typeassign'] = 'Задание';
 $string['typequiz'] = 'Тест';
+$string['typeworkshop'] = 'Семинар';
 $string['createactivities'] = 'Создать';
 $string['create'] = 'Создать';
 $string['retrycreation'] = 'Повторить создание';
