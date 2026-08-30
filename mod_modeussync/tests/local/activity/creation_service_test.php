@@ -52,6 +52,30 @@ final class failing_modeus_activity_factory implements activity_factory_interfac
     }
 }
 
+/** Factory double reproducing Moodle's cache update before a failed transaction is rolled back. */
+final class rollback_after_course_module_cache_factory implements activity_factory_interface {
+    /** @var int */
+    public $coursemoduleid = 0;
+
+    public function create(stdClass $course, int $sectionnum, stdClass $item): int {
+        global $CFG, $DB;
+
+        require_once($CFG->dirroot . '/course/lib.php');
+
+        $sourcecm = $DB->get_record('course_modules', ['course' => $course->id], '*', MUST_EXIST);
+        $newcm = clone $sourcecm;
+        unset($newcm->id);
+        $newcm->section = 0;
+        $newcm->idnumber = $item->externalid;
+
+        $transaction = $DB->start_delegated_transaction();
+        $this->coursemoduleid = add_course_module($newcm);
+        get_fast_modinfo($course)->get_cms();
+
+        throw new RuntimeException('Deliberate failure after course module cache rebuild.');
+    }
+}
+
 /** Integration tests for creation, reconciliation, partial retries, and unchanged `/sync`. */
 final class creation_service_test extends advanced_testcase {
 
@@ -177,6 +201,54 @@ final class creation_service_test extends advanced_testcase {
         $this->assert_event_metadata($sink->get_events(), activity_creation_failed::class, 'failed',
             'activity_creation', 'u', 'tool_modeussync_queue_items', $items[1]->id, $course->id,
             ['queueid' => $queue->id]);
+    }
+
+    public function test_failed_creation_rolls_back_transaction_and_clears_modinfo_cache(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        $this->getDataGenerator()->create_module('page', ['course' => $course->id]);
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'rolled-back-cm',
+            'name' => 'Сбой после создания course module',
+            'grade' => 25,
+        ]]);
+        $factory = new rollback_after_course_module_cache_factory();
+
+        $result = null;
+        $exception = null;
+        $transactionleftopen = null;
+        $cachedcms = null;
+        try {
+            $result = (new creation_service(
+                null,
+                new factory_registry($factory, $factory),
+                null,
+                new fake_modeus_sync_service()
+            ))->process($course->id, 2, [
+                $items[0]->id => target_module::ASSIGN,
+            ]);
+            $transactionleftopen = $DB->is_transaction_started();
+            if (!$transactionleftopen) {
+                $cachedcms = get_fast_modinfo($course)->get_cms();
+            }
+        } catch (Throwable $caught) {
+            $exception = $caught;
+        } finally {
+            if ($DB->is_transaction_started()) {
+                $DB->force_transaction_rollback();
+            }
+            get_fast_modinfo($course, 0, true);
+        }
+
+        $this->assertNull($exception);
+        $this->assertFalse($transactionleftopen);
+        $this->assertSame(course_status::PENDING, $result->status);
+        $this->assertSame(item_status::FAILED, (new queue_repository())->get_item($items[0]->id)->status);
+        $this->assertGreaterThan(0, $factory->coursemoduleid);
+        $this->assertFalse($DB->record_exists('course_modules', ['id' => $factory->coursemoduleid]));
+        $this->assertArrayNotHasKey($factory->coursemoduleid, $cachedcms);
     }
 
     public function test_retry_creates_only_missing_items(): void {

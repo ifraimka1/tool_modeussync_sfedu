@@ -91,6 +91,7 @@ final class creation_service {
                 }
 
                 $createdcmid = null;
+                $transactionwasstarted = $DB->is_transaction_started();
                 try {
                     $existing = $this->find_existing_activity($courseid, $item->externalid);
                     if ($existing !== null && !target_module::is_supported($existing->modulename)) {
@@ -127,6 +128,14 @@ final class creation_service {
                         );
                     }
                 } catch (\Throwable $exception) {
+                    if (!$transactionwasstarted && $DB->is_transaction_started()) {
+                        // The service handles this exception, so Moodle's default handler cannot roll it back.
+                        $DB->force_transaction_rollback();
+                    } else if ($DB->is_transaction_started()) {
+                        // Never roll back a transaction owned by the caller.
+                        throw $exception;
+                    }
+                    $this->reset_course_cache_after_failed_creation($courseid);
                     $latest = $this->queues->get_item($item->id);
                     if ($latest->status !== item_status::CREATED) {
                         $safeerror = $this->safe_creation_error($item);
@@ -250,6 +259,19 @@ final class creation_service {
         }
 
         return $this->queues->get_items($queueid);
+    }
+
+    /**
+     * Removes course modules cached before a failed creation whose transaction has already been rolled back.
+     *
+     * @param int $courseid Moodle course id.
+     * @return void
+     */
+    private function reset_course_cache_after_failed_creation(int $courseid): void {
+        global $CFG;
+
+        require_once($CFG->dirroot . '/course/lib.php');
+        rebuild_course_cache($courseid, true);
     }
 
     private function all_created(array $items): bool {
