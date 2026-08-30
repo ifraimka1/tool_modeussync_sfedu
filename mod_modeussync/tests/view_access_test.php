@@ -210,6 +210,78 @@ final class view_access_test extends advanced_testcase {
         $this->assertFalse($export->items[0]['selectedquiz']);
     }
 
+    public function test_output_sorts_items_by_name_and_moves_exam_and_bonus_items_to_end(): void {
+        global $PAGE;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        $names = [
+            'Итоговый экзамен',
+            'Яблоко',
+            'Бонусные баллы за активность',
+            'Экзаменационный тест',
+            'Анализ',
+            'Предэкзамен',
+        ];
+        foreach ($names as $index => $name) {
+            $repository->upsert_item($queue->id, [
+                'id' => 'sorting-' . $index,
+                'name' => $name,
+                'grade' => 10,
+            ]);
+        }
+        $PAGE->set_context(context_course::instance($course->id));
+
+        $export = (new queue_page(
+            $queue,
+            $repository->get_items($queue->id),
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ))->export_for_template($PAGE->get_renderer('core'));
+
+        $this->assertSame([
+            'Анализ',
+            'Предэкзамен',
+            'Экзаменационный тест',
+            'Яблоко',
+            'Бонусные баллы за активность',
+            'Итоговый экзамен',
+        ], array_column($export->items, 'name'));
+    }
+
+    public function test_output_does_not_treat_combining_mark_inside_exam_word_as_word_boundary(): void {
+        global $PAGE;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        $continuedword = "Экзамен\u{0301}а";
+        foreach (['Итоговый экзамен', $continuedword, 'Яблоко'] as $index => $name) {
+            $repository->upsert_item($queue->id, [
+                'id' => 'combining-mark-' . $index,
+                'name' => $name,
+                'grade' => 10,
+            ]);
+        }
+        $PAGE->set_context(context_course::instance($course->id));
+
+        $export = (new queue_page(
+            $queue,
+            $repository->get_items($queue->id),
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ))->export_for_template($PAGE->get_renderer('core'));
+
+        $this->assertSame([
+            $continuedword,
+            'Яблоко',
+            'Итоговый экзамен',
+        ], array_column($export->items, 'name'));
+    }
+
     /** @return array [course, cm]. */
     private function course_module(): array {
         $this->resetAfterTest();

@@ -37,7 +37,7 @@ final class queue_page implements \renderable, \templatable {
         $hasfaileditems = false;
         $hasmissingcreateditems = false;
 
-        foreach ($this->items as $item) {
+        foreach ($this->sort_items($this->items) as $item) {
             $hasfaileditems = $hasfaileditems || $item->status === item_status::FAILED;
             $activityurl = null;
             $activityexists = false;
@@ -96,5 +96,38 @@ final class queue_page implements \renderable, \templatable {
                 !$hasmissingcreateditems,
             'queuestatus' => get_string('course_status_' . $this->queue->status, 'mod_modeussync'),
         ];
+    }
+
+    /**
+     * Sorts items by name while keeping exams and bonus points at the end.
+     *
+     * @param array $items Queue items.
+     * @return array Sorted queue items.
+     */
+    private function sort_items(array $items): array {
+        \core_collator::asort_objects_by_property($items, 'name', \core_collator::SORT_STRING);
+
+        $regularitems = [];
+        $lastitems = [];
+        foreach ($items as $item) {
+            if ($this->is_last_item_name((string) $item->name)) {
+                $lastitems[] = $item;
+            } else {
+                $regularitems[] = $item;
+            }
+        }
+
+        return array_merge($regularitems, $lastitems);
+    }
+
+    /**
+     * Checks whether an item must be displayed at the end of the list.
+     *
+     * @param string $name Item name.
+     * @return bool
+     */
+    private function is_last_item_name(string $name): bool {
+        $pattern = '/(?<![\p{L}\p{M}\p{N}_])(?:экзамен|бонусные\s+баллы)(?![\p{L}\p{M}\p{N}_])/ui';
+        return preg_match($pattern, $name) === 1;
     }
 }
