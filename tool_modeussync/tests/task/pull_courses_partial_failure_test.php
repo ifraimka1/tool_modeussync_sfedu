@@ -61,6 +61,81 @@ final class testable_pull_courses_partial_failure extends pull_courses {
 /** Tests that one broken prototype does not block valid courses. */
 final class pull_courses_partial_failure_test extends advanced_testcase {
 
+    public function test_course_shortname_uses_full_course_name(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $prototype = $this->valid_prototype();
+        $prototype['name'] = 'Full course name';
+        $prototype['shortName'] = 'Adapter short name';
+
+        (new testable_pull_courses_partial_failure())->create_for_test(
+            [$prototype],
+            (int) $category->id
+        );
+
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame('Full course name', $course->shortname);
+    }
+
+    public function test_course_shortname_uses_next_available_suffix(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->getDataGenerator()->create_course(['shortname' => 'Repeated course']);
+        $this->getDataGenerator()->create_course(['shortname' => 'Repeated course 2']);
+        $prototype = $this->valid_prototype();
+        $prototype['name'] = 'Repeated course';
+
+        (new testable_pull_courses_partial_failure())->create_for_test(
+            [$prototype],
+            (int) $category->id
+        );
+
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame('Repeated course 3', $course->shortname);
+    }
+
+    public function test_course_shortname_increments_existing_trailing_number(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $this->getDataGenerator()->create_course(['shortname' => 'Numbered course 7']);
+        $prototype = $this->valid_prototype();
+        $prototype['name'] = 'Numbered course 7';
+
+        (new testable_pull_courses_partial_failure())->create_for_test(
+            [$prototype],
+            (int) $category->id
+        );
+
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame('Numbered course 8', $course->shortname);
+    }
+
+    public function test_course_shortname_suffix_stays_within_database_length(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $fullname = str_repeat('К', 254);
+        $this->getDataGenerator()->create_course(['shortname' => $fullname]);
+        $prototype = $this->valid_prototype();
+        $prototype['name'] = $fullname;
+
+        (new testable_pull_courses_partial_failure())->create_for_test(
+            [$prototype],
+            (int) $category->id
+        );
+
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame(str_repeat('К', 253) . ' 2', $course->shortname);
+        $this->assertSame(255, core_text::strlen($course->shortname));
+    }
+
     public function test_failed_course_rolls_back_and_next_course_is_created(): void {
         global $DB;
 

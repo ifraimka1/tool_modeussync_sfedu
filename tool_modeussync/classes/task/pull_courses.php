@@ -17,6 +17,8 @@ class pull_courses extends base_sync_job
 
     private const SYNC_COURSES_BATCH_SIZE = 25;
 
+    private const COURSE_SHORTNAME_MAX_LENGTH = 255;
+
     public function get_name()
     {
         return 'pull_courses';
@@ -280,7 +282,7 @@ class pull_courses extends base_sync_job
 
         $course['idnumber'] = $coursePrototype['id'];
         $course['fullname'] = $coursePrototype['name'];
-        $course['shortname'] = $coursePrototype['shortName'];
+        $course['shortname'] = $this->get_available_shortname($coursePrototype['name']);
         $course['summary'] = $coursePrototype['summary'];
         $course['category'] = $categoryId;
         $course['lang'] = get_string_manager()->translation_exists('ru', false) ? 'ru' : 'en';
@@ -289,6 +291,32 @@ class pull_courses extends base_sync_job
         $course['visible'] = 1;
 
         return $course;
+    }
+
+    private function get_available_shortname(string $fullname): string
+    {
+        global $DB;
+
+        $shortname = $fullname;
+        if (!$DB->record_exists('course', ['shortname' => $shortname])) {
+            return $shortname;
+        }
+
+        $basename = $fullname;
+        $number = 2;
+        if (preg_match('/^(.*?)\s+(\d+)$/u', $fullname, $matches)) {
+            $basename = $matches[1];
+            $number = (int)$matches[2] + 1;
+        }
+
+        do {
+            $suffix = ' ' . $number;
+            $maxbaselength = self::COURSE_SHORTNAME_MAX_LENGTH - \core_text::strlen($suffix);
+            $shortname = \core_text::substr($basename, 0, $maxbaselength) . $suffix;
+            $number++;
+        } while ($DB->record_exists('course', ['shortname' => $shortname]));
+
+        return $shortname;
     }
 
     private function create_sections($sections, $courseid)
