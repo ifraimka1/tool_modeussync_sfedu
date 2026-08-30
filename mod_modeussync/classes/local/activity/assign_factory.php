@@ -41,7 +41,10 @@ final class assign_factory implements activity_factory_interface {
         $moduleinfo->cutoffdate = 0;
         $moduleinfo->gradingduedate = 0;
         $moduleinfo->assignsubmission_onlinetext_enabled = 0;
-        $moduleinfo->assignsubmission_file_enabled = 0;
+        $moduleinfo->assignsubmission_file_enabled = 1;
+        $moduleinfo->assignsubmission_file_maxfiles = get_config('assignsubmission_file', 'maxfiles');
+        $moduleinfo->assignsubmission_file_maxsizebytes = get_config('assignsubmission_file', 'maxbytes');
+        $moduleinfo->assignsubmission_file_filetypes = (string) get_config('assignsubmission_file', 'filetypes');
         $moduleinfo->submissiondrafts = 0;
         $moduleinfo->requiresubmissionstatement = 0;
         $moduleinfo->sendnotifications = 0;

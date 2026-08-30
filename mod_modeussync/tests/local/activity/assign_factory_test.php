@@ -45,6 +45,42 @@ final class assign_factory_test extends advanced_testcase {
         $this->assertEquals(37.0, (float) $gradeitem->grademax);
     }
 
+    public function test_factory_enables_only_file_submissions_with_site_defaults(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        set_config('maxfiles', 7, 'assignsubmission_file');
+        set_config('maxbytes', 1048576, 'assignsubmission_file');
+        set_config('filetypes', '.pdf,.docx', 'assignsubmission_file');
+        $course = $this->getDataGenerator()->create_course();
+        $sectionnum = (new section_manager())->get_or_create($course->id);
+        $item = (object) [
+            'externalid' => 'file-submission-assign',
+            'name' => 'Задание с ответом в виде файла',
+            'maxgrade' => 20,
+        ];
+
+        $cmid = (new assign_factory())->create($course, $sectionnum, $item);
+        $cm = get_coursemodule_from_id('assign', $cmid, $course->id, false, MUST_EXIST);
+        $fileconfig = $DB->get_records_menu('assign_plugin_config', [
+            'assignment' => $cm->instance,
+            'plugin' => 'file',
+            'subtype' => 'assignsubmission',
+        ], '', 'name,value');
+        $onlinetextenabled = $DB->get_field('assign_plugin_config', 'value', [
+            'assignment' => $cm->instance,
+            'plugin' => 'onlinetext',
+            'subtype' => 'assignsubmission',
+            'name' => 'enabled',
+        ], MUST_EXIST);
+
+        $this->assertSame('1', $fileconfig['enabled']);
+        $this->assertSame('7', $fileconfig['maxfilesubmissions']);
+        $this->assertSame('1048576', $fileconfig['maxsubmissionsizebytes']);
+        $this->assertSame('.pdf,.docx', $fileconfig['filetypeslist']);
+        $this->assertSame('0', $onlinetextenabled);
+    }
+
     public function test_factory_rejects_fractional_assign_grade_instead_of_rounding_it(): void {
         $this->resetAfterTest();
         $course = $this->getDataGenerator()->create_course();
