@@ -32,6 +32,7 @@ final class quiz_factory_test extends advanced_testcase {
 
         $this->assertSame('meeting-quiz-1', $cm->idnumber);
         $this->assertSame('Итоговый тест', $quiz->name);
+        $this->assertSame('', $quiz->password);
         $this->assertEquals(62.0, (float) $quiz->grade);
         $this->assertEquals(62.0, (float) $gradeitem->grademax);
         $this->assertEquals(0.0, (float) $quiz->sumgrades);

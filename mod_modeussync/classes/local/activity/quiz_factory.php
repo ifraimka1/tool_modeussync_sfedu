@@ -52,7 +52,7 @@ final class quiz_factory implements activity_factory_interface {
         $moduleinfo->questiondecimalpoints = -1;
         $moduleinfo->showuserpicture = 0;
         $moduleinfo->showblocks = 0;
-        $moduleinfo->password = '';
+        $moduleinfo->quizpassword = '';
         $moduleinfo->subnet = '';
         $moduleinfo->delay1 = 0;
         $moduleinfo->delay2 = 0;
