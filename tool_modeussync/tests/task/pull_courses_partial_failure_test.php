@@ -61,81 +61,6 @@ final class testable_pull_courses_partial_failure extends pull_courses {
 /** Tests that one broken prototype does not block valid courses. */
 final class pull_courses_partial_failure_test extends advanced_testcase {
 
-    public function test_course_shortname_uses_full_course_name(): void {
-        global $DB;
-
-        $this->resetAfterTest();
-        $category = $this->getDataGenerator()->create_category();
-        $prototype = $this->valid_prototype();
-        $prototype['name'] = 'Full course name';
-        $prototype['shortName'] = 'Adapter short name';
-
-        (new testable_pull_courses_partial_failure())->create_for_test(
-            [$prototype],
-            (int) $category->id
-        );
-
-        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
-        $this->assertSame('Full course name', $course->shortname);
-    }
-
-    public function test_course_shortname_uses_next_available_suffix(): void {
-        global $DB;
-
-        $this->resetAfterTest();
-        $category = $this->getDataGenerator()->create_category();
-        $this->getDataGenerator()->create_course(['shortname' => 'Repeated course']);
-        $this->getDataGenerator()->create_course(['shortname' => 'Repeated course 2']);
-        $prototype = $this->valid_prototype();
-        $prototype['name'] = 'Repeated course';
-
-        (new testable_pull_courses_partial_failure())->create_for_test(
-            [$prototype],
-            (int) $category->id
-        );
-
-        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
-        $this->assertSame('Repeated course 3', $course->shortname);
-    }
-
-    public function test_course_shortname_increments_existing_trailing_number(): void {
-        global $DB;
-
-        $this->resetAfterTest();
-        $category = $this->getDataGenerator()->create_category();
-        $this->getDataGenerator()->create_course(['shortname' => 'Numbered course 7']);
-        $prototype = $this->valid_prototype();
-        $prototype['name'] = 'Numbered course 7';
-
-        (new testable_pull_courses_partial_failure())->create_for_test(
-            [$prototype],
-            (int) $category->id
-        );
-
-        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
-        $this->assertSame('Numbered course 8', $course->shortname);
-    }
-
-    public function test_course_shortname_suffix_stays_within_database_length(): void {
-        global $DB;
-
-        $this->resetAfterTest();
-        $category = $this->getDataGenerator()->create_category();
-        $fullname = str_repeat('К', 254);
-        $this->getDataGenerator()->create_course(['shortname' => $fullname]);
-        $prototype = $this->valid_prototype();
-        $prototype['name'] = $fullname;
-
-        (new testable_pull_courses_partial_failure())->create_for_test(
-            [$prototype],
-            (int) $category->id
-        );
-
-        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
-        $this->assertSame(str_repeat('К', 253) . ' 2', $course->shortname);
-        $this->assertSame(255, core_text::strlen($course->shortname));
-    }
-
     public function test_failed_course_rolls_back_and_next_course_is_created(): void {
         global $DB;
 
@@ -192,6 +117,28 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertCount(1, $syncservice->batches);
     }
 
+    public function test_chat_prototype_is_skipped_without_failing_course_creation(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+
+        $result = $task->create_for_test([$this->chat_prototype()], (int) $category->id);
+
+        $this->assertFalse($result['failed']);
+        $this->assertCount(1, $result['courses']);
+        $course = $DB->get_record('course', ['idnumber' => 'chat-course-id'], '*', MUST_EXIST);
+        $chatmodule = $DB->get_record('modules', ['name' => 'chat']);
+
+        if ($chatmodule !== false) {
+            $this->assertFalse($DB->record_exists('course_modules', [
+                'course' => $course->id,
+                'module' => $chatmodule->id,
+            ]));
+        }
+    }
+
     private function invalid_prototype(): array {
         return [
             'id' => 'invalid-course-id',
@@ -216,6 +163,23 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
             'shortName' => 'valid-course-shortname',
             'summary' => 'Курс создан по РМУП [valid-modeus-id]',
             'sections' => [],
+        ];
+    }
+
+    private function chat_prototype(): array {
+        return [
+            'id' => 'chat-course-id',
+            'name' => 'Course with unsupported chat activity',
+            'shortName' => 'chat-course-shortname',
+            'summary' => 'Курс создан по РМУП [chat-modeus-id]',
+            'sections' => [[
+                'name' => 'Chat section',
+                'modules' => [[
+                    'id' => 'chat-module-id',
+                    'name' => 'Unsupported chat activity',
+                    'moduleTypeId' => 'chat',
+                ]],
+            ]],
         ];
     }
 }

@@ -11,6 +11,7 @@ final class target_module {
 
     public const ASSIGN = 'assign';
     public const QUIZ = 'quiz';
+    public const WORKSHOP = 'workshop';
     public const DEFAULT = self::ASSIGN;
 
     /**
@@ -20,7 +21,7 @@ final class target_module {
      * @return bool
      */
     public static function is_supported(string $value): bool {
-        return in_array($value, [self::ASSIGN, self::QUIZ], true);
+        return in_array($value, [self::ASSIGN, self::QUIZ, self::WORKSHOP], true);
     }
 
     private function __construct() {

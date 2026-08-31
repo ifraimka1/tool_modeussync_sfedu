@@ -108,6 +108,7 @@ class queue_repository_test extends advanced_testcase {
     public function test_target_module_support_and_default(): void {
         $this->assertTrue(target_module::is_supported(target_module::ASSIGN));
         $this->assertTrue(target_module::is_supported(target_module::QUIZ));
+        $this->assertTrue(target_module::is_supported(target_module::WORKSHOP));
         $this->assertFalse(target_module::is_supported('lesson'));
         $this->assertSame(target_module::ASSIGN, target_module::DEFAULT);
     }
