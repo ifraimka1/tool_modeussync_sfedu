@@ -115,6 +115,8 @@ class pull_courses extends base_sync_job
                 if ($existingCourse !== null) {
                     mtrace("Курс с IDNumber = [$idnumber] уже существует, id: ({$existingCourse->id})");
 
+                    $this->ensure_attendance_module((int) $existingCourse->id);
+
                     if ($idModeus === null) {
                         mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
                     } else {
@@ -167,6 +169,7 @@ class pull_courses extends base_sync_job
             $course = $this->createCourse($coursePrototype, $categoryId);
             $courseId = (int) create_course((object) $course)->id;
             $this->create_sections($coursePrototype['sections'], $courseId);
+            $this->ensure_attendance_module($courseId);
             $transaction->allow_commit();
             return $courseId;
         } catch (Throwable $e) {
@@ -328,6 +331,40 @@ class pull_courses extends base_sync_job
 
             $this->create_modules($sectionProto['modules'], $courseid, $section->section);
         }
+    }
+
+    /**
+     * Ensures that the course has an attendance activity without adding a duplicate.
+     *
+     * Existing attendance activities are preserved regardless of their section. A
+     * missing activity is created in section zero, which is the General section.
+     */
+    private function ensure_attendance_module(int $courseid): void
+    {
+        global $DB;
+
+        $attendancemodule = $DB->get_record('modules', ['name' => 'attendance']);
+        if ($attendancemodule === false) {
+            mtrace("Плагин mod_attendance не установлен; элемент посещаемости для курса [$courseid] не создан");
+            return;
+        }
+
+        if ($DB->record_exists('course_modules', [
+            'course' => $courseid,
+            'module' => $attendancemodule->id,
+            'deletioninprogress' => 0,
+        ])) {
+            return;
+        }
+
+        create_module((object) [
+            'modulename' => 'attendance',
+            'name' => get_string('modulename', 'mod_attendance'),
+            'course' => $courseid,
+            'section' => 0,
+            'visible' => 1,
+            'grade' => 100,
+        ]);
     }
 
     private function create_modules($modules, $courseid, $sectionid)

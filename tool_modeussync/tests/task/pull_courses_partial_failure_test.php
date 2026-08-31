@@ -61,6 +61,89 @@ final class testable_pull_courses_partial_failure extends pull_courses {
 /** Tests that one broken prototype does not block valid courses. */
 final class pull_courses_partial_failure_test extends advanced_testcase {
 
+    public function test_course_is_created_when_attendance_plugin_is_unavailable(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $attendancemodule = $DB->get_record('modules', ['name' => 'attendance']);
+        if ($attendancemodule !== false) {
+            $DB->set_field(
+                'modules',
+                'name',
+                'attendance_test_off',
+                ['id' => $attendancemodule->id]
+            );
+        }
+        $this->assertFalse($DB->record_exists('modules', ['name' => 'attendance']));
+        $task = new testable_pull_courses_partial_failure();
+
+        $result = $task->create_for_test([$this->prototype_with_label()], (int) $category->id);
+
+        $this->assertFalse($result['failed']);
+        $this->assertCount(1, $result['courses']);
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame('Valid course', $course->fullname);
+        $this->assertSame('Valid course', $course->shortname);
+        $this->assertSame('Курс создан по РМУП [valid-modeus-id]', $course->summary);
+        $this->assertSame((int) $category->id, (int) $course->category);
+        $this->assertSame('topics', $course->format);
+        $this->assertSame(1, (int) $course->visible);
+        $this->assertTrue($DB->record_exists('course_sections', [
+            'course' => $course->id,
+            'name' => 'Regular section',
+        ]));
+        $labelmoduleid = $DB->get_field('modules', 'id', ['name' => 'label'], MUST_EXIST);
+        $this->assertTrue($DB->record_exists('course_modules', [
+            'course' => $course->id,
+            'module' => $labelmoduleid,
+        ]));
+    }
+
+    public function test_new_course_gets_one_attendance_in_general_section(): void {
+        $this->resetAfterTest();
+        $this->require_attendance_plugin();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+
+        $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
+
+        $courseid = (int) $result['courses'][0]['id_lms'];
+        $this->assertSame(1, $this->count_attendance_modules($courseid, 0));
+        $this->assertSame(1, $this->count_attendance_modules($courseid));
+    }
+
+    public function test_existing_course_without_attendance_gets_one_in_general_section(): void {
+        $this->resetAfterTest();
+        $this->require_attendance_plugin();
+        $category = $this->getDataGenerator()->create_category();
+        $course = $this->getDataGenerator()->create_course([
+            'category' => $category->id,
+            'idnumber' => 'valid-course-id',
+        ]);
+        $task = new testable_pull_courses_partial_failure();
+
+        $task->create_for_test([$this->valid_prototype()], (int) $category->id);
+
+        $this->assertSame(1, $this->count_attendance_modules((int) $course->id, 0));
+        $this->assertSame(1, $this->count_attendance_modules((int) $course->id));
+    }
+
+    public function test_repeated_course_generation_does_not_duplicate_attendance(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->require_attendance_plugin();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+
+        $task->create_for_test([$this->valid_prototype()], (int) $category->id);
+        $task->create_for_test([$this->valid_prototype()], (int) $category->id);
+
+        $course = $DB->get_record('course', ['idnumber' => 'valid-course-id'], '*', MUST_EXIST);
+        $this->assertSame(1, $this->count_attendance_modules((int) $course->id));
+    }
+
     public function test_failed_course_rolls_back_and_next_course_is_created(): void {
         global $DB;
 
@@ -181,5 +264,53 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
                 ]],
             ]],
         ];
+    }
+
+    private function prototype_with_label(): array {
+        $prototype = $this->valid_prototype();
+        $prototype['sections'] = [[
+            'name' => 'Regular section',
+            'modules' => [[
+                'id' => 'valid-label-id',
+                'name' => 'Regular label',
+                'moduleTypeId' => 'label',
+            ]],
+        ]];
+
+        return $prototype;
+    }
+
+    private function count_attendance_modules(int $courseid, ?int $sectionnum = null): int {
+        global $DB;
+
+        $params = [
+            'courseid' => $courseid,
+            'modulename' => 'attendance',
+        ];
+        $sectioncondition = '';
+        if ($sectionnum !== null) {
+            $sectioncondition = ' AND cs.section = :sectionnum';
+            $params['sectionnum'] = $sectionnum;
+        }
+
+        return $DB->count_records_sql(
+            "SELECT COUNT(1)
+               FROM {course_modules} cm
+               JOIN {modules} m ON m.id = cm.module
+               JOIN {course_sections} cs ON cs.id = cm.section
+              WHERE cm.course = :courseid
+                AND m.name = :modulename
+                AND cm.deletioninprogress = 0
+                    {$sectioncondition}",
+            $params
+        );
+    }
+
+    private function require_attendance_plugin(): void {
+        global $DB;
+
+        if (!$DB->record_exists('modules', ['name' => 'attendance'])) {
+            $this->markTestSkipped('mod_attendance is not installed in the test Moodle instance');
+        }
     }
 }
