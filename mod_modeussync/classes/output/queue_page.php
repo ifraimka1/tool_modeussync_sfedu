@@ -68,6 +68,8 @@ final class queue_page implements \renderable, \templatable {
             $rows[] = [
                 'id' => (int) $item->id,
                 'name' => format_string($item->name, true, ['context' => $context]),
+                'nameoverride' => $item->nameoverride ?? '',
+                'nameoverridemaxlength' => 255,
                 'maxgrade' => format_float((float) $item->maxgrade, 2),
                 'statuslabel' => get_string('status_' . $item->status, 'mod_modeussync'),
                 'selectedassign' => $item->targetmodule === target_module::ASSIGN,

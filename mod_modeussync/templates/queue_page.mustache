@@ -4,9 +4,14 @@
         <input type="hidden" name="sesskey" value="{{sesskey}}">
         <input type="hidden" name="action" value="create">
         <div class="mod-modeussync-queue">
+            <div class="row font-weight-bold mb-2">
+                <div class="col-md-5">{{#str}}modeusname, mod_modeussync{{/str}}</div>
+                <div class="col-md-3">{{#str}}targetmodule, mod_modeussync{{/str}}</div>
+                <div class="col-md-4">{{#str}}nameoverride, mod_modeussync{{/str}}</div>
+            </div>
             {{#items}}
-                <div class="d-flex align-items-center justify-content-between mb-3">
-                    <div class="mr-3">
+                <div class="row align-items-center mb-3">
+                    <div class="col-md-5 mb-2 mb-md-0">
                         <div class="font-weight-bold">{{name}}</div>
                         <div class="text-muted">{{#str}}maxgrade, mod_modeussync{{/str}}: {{maxgrade}}</div>
                         <div>{{statuslabel}}</div>
@@ -15,17 +20,28 @@
                             <a href="{{activityurl}}">{{#str}}openactivity, mod_modeussync{{/str}}</a>
                         {{/activityurl}}
                     </div>
-                    <select name="targetmodule[{{id}}]" class="custom-select" {{#disabled}}disabled{{/disabled}}>
-                        <option value="assign" {{#selectedassign}}selected{{/selectedassign}}>
-                            {{#str}}typeassign, mod_modeussync{{/str}}
-                        </option>
-                        <option value="quiz" {{#selectedquiz}}selected{{/selectedquiz}}>
-                            {{#str}}typequiz, mod_modeussync{{/str}}
-                        </option>
-                        <option value="workshop" {{#selectedworkshop}}selected{{/selectedworkshop}}>
-                            {{#str}}typeworkshop, mod_modeussync{{/str}}
-                        </option>
-                    </select>
+                    <div class="col-md-3 mb-2 mb-md-0">
+                        <select name="targetmodule[{{id}}]" class="custom-select" {{#disabled}}disabled{{/disabled}}>
+                            <option value="assign" {{#selectedassign}}selected{{/selectedassign}}>
+                                {{#str}}typeassign, mod_modeussync{{/str}}
+                            </option>
+                            <option value="quiz" {{#selectedquiz}}selected{{/selectedquiz}}>
+                                {{#str}}typequiz, mod_modeussync{{/str}}
+                            </option>
+                            <option value="workshop" {{#selectedworkshop}}selected{{/selectedworkshop}}>
+                                {{#str}}typeworkshop, mod_modeussync{{/str}}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <input type="text"
+                               name="nameoverride[{{id}}]"
+                               value="{{nameoverride}}"
+                               maxlength="{{nameoverridemaxlength}}"
+                               class="form-control"
+                               aria-label="{{#str}}nameoverride, mod_modeussync{{/str}}"
+                               {{#disabled}}disabled{{/disabled}}>
+                    </div>
                 </div>
             {{/items}}
         </div>

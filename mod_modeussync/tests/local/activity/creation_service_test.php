@@ -163,6 +163,53 @@ final class creation_service_test extends advanced_testcase {
             'tool_modeussync_course_queue', $queue->id, $course->id, ['createdcount' => 2]);
     }
 
+    public function test_process_uses_nonempty_override_and_falls_back_for_blank_override(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [$queue, $items] = $this->queue($course->id, [
+            ['id' => 'override-assign', 'name' => 'Modeus assignment name', 'grade' => 25],
+            ['id' => 'override-quiz', 'name' => 'Modeus quiz name', 'grade' => 40],
+        ]);
+        $repository = new queue_repository();
+        $sync = new fake_modeus_sync_service();
+
+        $result = (new creation_service(null, null, null, $sync))->process(
+            $course->id,
+            2,
+            [
+                $items[0]->id => target_module::ASSIGN,
+                $items[1]->id => target_module::QUIZ,
+            ],
+            [
+                $items[0]->id => 'Teacher assignment name',
+                $items[1]->id => '   ',
+            ]
+        );
+
+        $assigncm = get_coursemodule_from_id(
+            'assign',
+            $repository->get_item($items[0]->id)->coursemoduleid,
+            $course->id,
+            false,
+            MUST_EXIST
+        );
+        $quizcm = get_coursemodule_from_id(
+            'quiz',
+            $repository->get_item($items[1]->id)->coursemoduleid,
+            $course->id,
+            false,
+            MUST_EXIST
+        );
+        $this->assertSame('Teacher assignment name', $DB->get_field('assign', 'name', ['id' => $assigncm->instance]));
+        $this->assertSame('Modeus quiz name', $DB->get_field('quiz', 'name', ['id' => $quizcm->instance]));
+        $this->assertSame('Modeus assignment name', $repository->get_item($items[0]->id)->name);
+        $this->assertSame('Teacher assignment name', $repository->get_item($items[0]->id)->nameoverride);
+        $this->assertNull($repository->get_item($items[1]->id)->nameoverride);
+        $this->assertSame(course_status::SYNCED, $result->status);
+    }
+
     public function test_existing_supported_activity_is_reconciled_without_duplicate(): void {
         global $DB;
 

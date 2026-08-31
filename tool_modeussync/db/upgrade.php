@@ -59,5 +59,16 @@ function xmldb_tool_modeussync_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026071600, 'tool', 'modeussync');
     }
 
+    if ($oldversion < 2026083100) {
+        $table = new xmldb_table('tool_modeussync_queue_items');
+        $field = new xmldb_field('nameoverride', XMLDB_TYPE_CHAR, '255', null, null, null, null, 'name');
+
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        upgrade_plugin_savepoint(true, 2026083100, 'tool', 'modeussync');
+    }
+
     return true;
 }

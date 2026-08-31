@@ -43,14 +43,19 @@ final class creation_service {
         $this->syncservice = $syncservice ?? new SyncService();
     }
 
-    public function process(int $courseid, int $userid, array $selections): \stdClass {
+    public function process(
+        int $courseid,
+        int $userid,
+        array $selections,
+        array $nameoverrides = []
+    ): \stdClass {
         global $DB;
 
         $queue = $this->queues->get_course_queue($courseid);
         if ($queue === null) {
             throw new \invalid_parameter_exception('The course has no Modeus assignment queue.');
         }
-        $this->validate_selections($queue->id, $selections);
+        $this->validate_selections($queue->id, $selections, $nameoverrides);
 
         $factory = \core\lock\lock_config::get_lock_factory('tool_modeussync');
         $lock = $factory->get_lock('queue:' . $courseid, 30);
@@ -83,6 +88,7 @@ final class creation_service {
             ]);
 
             $this->queues->save_target_modules($queue->id, $selections);
+            $this->queues->save_name_overrides($queue->id, $nameoverrides);
             $this->queues->set_course_status($queue->id, course_status::PROCESSING);
             $sectionnum = null;
 
@@ -92,6 +98,7 @@ final class creation_service {
                 }
 
                 $createdcmid = null;
+                $creationitem = $item;
                 $transactionwasstarted = $DB->is_transaction_started();
                 try {
                     $existing = $this->find_existing_activity($courseid, $item->externalid);
@@ -119,8 +126,12 @@ final class creation_service {
                         if ($sectionnum === null) {
                             $sectionnum = $this->sections->get_or_create($courseid);
                         }
+                        $creationitem = clone $item;
+                        $creationitem->name = !empty(trim((string) ($item->nameoverride ?? '')))
+                            ? $item->nameoverride
+                            : $item->name;
                         $createdcmid = $this->factories->get($item->targetmodule)
-                            ->create($course, $sectionnum, $item);
+                            ->create($course, $sectionnum, $creationitem);
                         $this->queues->mark_item_created(
                             $item->id,
                             $createdcmid,
@@ -139,7 +150,7 @@ final class creation_service {
                     $this->reset_course_cache_after_failed_creation($courseid);
                     $latest = $this->queues->get_item($item->id);
                     if ($latest->status !== item_status::CREATED) {
-                        $safeerror = $this->safe_creation_error($item);
+                        $safeerror = $this->safe_creation_error($creationitem);
                         $this->queues->set_item_status($item->id, item_status::FAILED, $safeerror);
                         $this->trigger_event(activity_creation_failed::class, [
                             'objectid' => $item->id,
@@ -184,7 +195,7 @@ final class creation_service {
         }
     }
 
-    private function validate_selections(int $queueid, array $selections): void {
+    private function validate_selections(int $queueid, array $selections, array $nameoverrides = []): void {
         $items = [];
         foreach ($this->queues->get_items($queueid) as $item) {
             $items[(int) $item->id] = $item;
@@ -199,6 +210,21 @@ final class creation_service {
             }
             if (!is_string($modulename) || !target_module::is_supported($modulename)) {
                 throw new \invalid_parameter_exception('Unsupported target module.');
+            }
+        }
+
+        foreach ($nameoverrides as $itemid => $override) {
+            if (filter_var($itemid, FILTER_VALIDATE_INT) === false || (int) $itemid <= 0) {
+                throw new \invalid_parameter_exception('Queue item ids must be positive integers.');
+            }
+            if (!isset($items[(int) $itemid])) {
+                throw new \invalid_parameter_exception('Queue item does not belong to this course.');
+            }
+            if (!is_string($override)) {
+                throw new \invalid_parameter_exception('Queue item name overrides must be strings.');
+            }
+            if (\core_text::strlen(trim($override)) > 255) {
+                throw new \invalid_parameter_exception('Queue item name overrides cannot exceed 255 characters.');
             }
         }
     }

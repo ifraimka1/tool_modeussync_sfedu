@@ -210,6 +210,44 @@ final class view_access_test extends advanced_testcase {
         $this->assertFalse($export->items[0]['selectedquiz']);
     }
 
+    public function test_output_exposes_stored_name_override_and_read_only_state(): void {
+        global $PAGE;
+
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        [$pending] = $repository->upsert_item($queue->id, [
+            'id' => 'pending-override',
+            'name' => 'Modeus assignment',
+            'grade' => 25,
+        ]);
+        $repository->save_name_overrides($queue->id, [$pending->id => 'Teacher <b>name</b>']);
+        [$created] = $repository->upsert_item($queue->id, [
+            'id' => 'created-override',
+            'name' => 'Created assignment',
+            'grade' => 25,
+        ]);
+        $repository->mark_item_created($created->id, 123, 2, target_module::ASSIGN);
+        $PAGE->set_context(context_course::instance($course->id));
+
+        $export = (new queue_page(
+            $queue,
+            $repository->get_items($queue->id),
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ))->export_for_template($PAGE->get_renderer('core'));
+        $rows = [];
+        foreach ($export->items as $row) {
+            $rows[$row['id']] = $row;
+        }
+
+        $this->assertSame('Teacher <b>name</b>', $rows[$pending->id]['nameoverride']);
+        $this->assertSame(255, $rows[$pending->id]['nameoverridemaxlength']);
+        $this->assertFalse($rows[$pending->id]['disabled']);
+        $this->assertTrue($rows[$created->id]['disabled']);
+    }
+
     public function test_output_sorts_items_by_name_and_moves_exam_and_bonus_items_to_end(): void {
         global $PAGE;
 

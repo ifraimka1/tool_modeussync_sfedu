@@ -24,7 +24,13 @@ $PAGE->set_heading(format_string($course->fullname));
 if (data_submitted() && optional_param('action', '', PARAM_ALPHA) === 'create') {
     access::require_create_request($context, (int) $course->id);
     $selections = optional_param_array('targetmodule', [], PARAM_ALPHANUMEXT);
-    $result = (new creation_service())->process((int) $course->id, (int) $USER->id, $selections);
+    $nameoverrides = optional_param_array('nameoverride', [], PARAM_TEXT);
+    $result = (new creation_service())->process(
+        (int) $course->id,
+        (int) $USER->id,
+        $selections,
+        $nameoverrides
+    );
     redirect($PAGE->url, get_string('processresult_' . $result->status, 'mod_modeussync'));
 }
 

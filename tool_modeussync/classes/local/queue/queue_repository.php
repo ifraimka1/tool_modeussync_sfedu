@@ -393,6 +393,50 @@ final class queue_repository {
     }
 
     /**
+     * Persists optional teacher-provided names for pending or failed items.
+     *
+     * @param int $queueid Queue id.
+     * @param array $overrides Item-id to optional name override map.
+     * @return void
+     */
+    public function save_name_overrides(int $queueid, array $overrides): void {
+        global $DB;
+
+        $normalized = [];
+        foreach ($overrides as $itemid => $override) {
+            if (filter_var($itemid, FILTER_VALIDATE_INT) === false || (int) $itemid <= 0) {
+                throw new \invalid_parameter_exception('Queue item ids must be positive integers.');
+            }
+            if (!is_string($override)) {
+                throw new \invalid_parameter_exception('Queue item name overrides must be strings.');
+            }
+            $override = trim($override);
+            if (\core_text::strlen($override) > 255) {
+                throw new \invalid_parameter_exception('Queue item name overrides cannot exceed 255 characters.');
+            }
+            $item = $DB->get_record(self::ITEMS_TABLE, ['id' => (int) $itemid]);
+            if ($item === false || (int) $item->queueid !== $queueid) {
+                throw new \invalid_parameter_exception('Queue item does not belong to this queue.');
+            }
+            $normalized[] = [$item, $override === '' ? null : $override];
+        }
+
+        foreach ($normalized as [$item, $override]) {
+            if ($item->status !== item_status::PENDING && $item->status !== item_status::FAILED) {
+                continue;
+            }
+            if ($item->nameoverride === $override) {
+                continue;
+            }
+            $DB->update_record(self::ITEMS_TABLE, (object) [
+                'id' => $item->id,
+                'nameoverride' => $override,
+                'timemodified' => time(),
+            ]);
+        }
+    }
+
+    /**
      * Gets course ids that currently have queue items.
      *
      * @param int $limit Maximum number of course ids.
