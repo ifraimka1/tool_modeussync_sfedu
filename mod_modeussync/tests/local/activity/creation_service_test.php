@@ -79,6 +79,48 @@ final class rollback_after_course_module_cache_factory implements activity_facto
 /** Integration tests for creation, reconciliation, partial retries, and unchanged `/sync`. */
 final class creation_service_test extends advanced_testcase {
 
+    public function test_process_creates_activities_in_display_sort_order(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [
+            ['id' => 'final-exam', 'name' => 'Итоговый экзамен', 'grade' => 10],
+            ['id' => 'apple', 'name' => 'Яблоко', 'grade' => 10],
+            ['id' => 'bonus', 'name' => 'Бонусные баллы за активность', 'grade' => 10],
+            ['id' => 'exam-test', 'name' => 'Экзаменационный тест', 'grade' => 10],
+            ['id' => 'analysis', 'name' => 'Анализ', 'grade' => 10],
+            ['id' => 'pre-exam', 'name' => 'Предэкзамен', 'grade' => 10],
+        ]);
+        $selections = [];
+        foreach ($items as $item) {
+            $selections[$item->id] = target_module::ASSIGN;
+        }
+
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))
+            ->process($course->id, 2, $selections);
+
+        $section = $DB->get_record('course_sections', [
+            'course' => $course->id,
+            'name' => 'Задания из Modeus',
+        ], '*', MUST_EXIST);
+        $externalids = [];
+        foreach (array_filter(explode(',', $section->sequence)) as $coursemoduleid) {
+            $externalids[] = $DB->get_field('course_modules', 'idnumber', [
+                'id' => (int) $coursemoduleid,
+            ], MUST_EXIST);
+        }
+
+        $this->assertSame([
+            'analysis',
+            'pre-exam',
+            'exam-test',
+            'apple',
+            'bonus',
+            'final-exam',
+        ], $externalids);
+    }
+
     public function test_process_creates_assign_and_quiz_then_syncs_course(): void {
         $this->resetAfterTest();
         $course = $this->course();

@@ -8,6 +8,7 @@ use mod_modeussync\event\creation_started;
 use mod_modeussync\event\queue_completed;
 use mod_modeussync\event\sync_failed;
 use mod_modeussync\event\sync_succeeded;
+use mod_modeussync\local\queue\item_sorter;
 use tool_modeussync\local\queue\course_status;
 use tool_modeussync\local\queue\item_status;
 use tool_modeussync\local\queue\queue_repository;
@@ -85,7 +86,7 @@ final class creation_service {
             $this->queues->set_course_status($queue->id, course_status::PROCESSING);
             $sectionnum = null;
 
-            foreach ($this->queues->get_items($queue->id) as $item) {
+            foreach (item_sorter::sort($this->queues->get_items($queue->id)) as $item) {
                 if ($item->status === item_status::CREATED) {
                     continue;
                 }
