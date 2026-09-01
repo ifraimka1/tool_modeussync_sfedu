@@ -8,4 +8,7 @@ $observers = [[
 ], [
     'eventname' => '\core\event\course_module_deleted',
     'callback' => '\tool_modeussync\observer::course_module_deleted',
+], [
+    'eventname' => '\core\event\course_restored',
+    'callback' => '\tool_modeussync\observer::course_restored',
 ]];

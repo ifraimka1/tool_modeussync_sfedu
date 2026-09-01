@@ -5,6 +5,7 @@ namespace tool_modeussync\task;
 use completion_info;
 use Throwable;
 use tool_modeussync\courses_consts;
+use tool_modeussync\local\course_reference;
 use tool_modeussync\repository\courses_repository;
 use tool_modeussync\task\base\base_sync_job;
 use tool_modeussync\service\SyncService;
@@ -95,7 +96,7 @@ class pull_courses extends base_sync_job
 
         $modeusIds = array();
         foreach ($courses as $coursePrototype) {
-            $idModeus = $this->extract_modeus_id_from_summary($coursePrototype['summary'] ?? null);
+            $idModeus = course_reference::extract_modeus_id($coursePrototype['summary'] ?? null);
             if ($idModeus !== null) {
                 $modeusIds[$idModeus] = true;
             }
@@ -118,7 +119,7 @@ class pull_courses extends base_sync_job
             mtrace("Создаю курс [$fullname]...");
 
             try {
-                $idModeus = $this->extract_modeus_id_from_summary($coursePrototype['summary'] ?? null);
+                $idModeus = course_reference::extract_modeus_id($coursePrototype['summary'] ?? null);
                 if ($idModeus === null) {
                     throw new \UnexpectedValueException(
                         "Не удалось извлечь ID РМУП из описания курса [{$fullname}]"
@@ -135,6 +136,14 @@ class pull_courses extends base_sync_job
                         $existingCourseGroup['duplicates']
                     );
                     $coursesByModeusId[$idModeus]['duplicates'] = array();
+
+                    if (trim((string) $existingCourse->idnumber) !== $idModeus) {
+                        update_course((object) [
+                            'id' => (int) $existingCourse->id,
+                            'idnumber' => $idModeus,
+                        ]);
+                        $existingCourse->idnumber = $idModeus;
+                    }
 
                     mtrace("Курс с ID РМУП = [$idModeus] уже существует, id: ({$existingCourse->id})");
 
@@ -202,21 +211,6 @@ class pull_courses extends base_sync_job
         }
     }
 
-    private function extract_modeus_id_from_summary(?string $summary): ?string
-    {
-        if (empty($summary)) {
-            return null;
-        }
-
-        $pattern = '/Курс\s+создан\s+по\s+РМУП\s*\[([^\]]+)\]/u';
-
-        if (preg_match($pattern, $summary, $matches)) {
-            return trim($matches[1]);
-        }
-
-        return null;
-    }
-
     /**
      * Индексирует существующие курсы по идентификатору РМУП и выбирает самый старый курс.
      */
@@ -224,9 +218,20 @@ class pull_courses extends base_sync_job
     {
         $requestedIds = array_fill_keys($requestedModeusIds, true);
         $groupedCourses = array();
+        $copyRestoreTargets = courses_repository::get_course_copy_restore_targets(array_map(
+            static function ($course): int {
+                return (int) $course->id;
+            },
+            $courses
+        ));
 
         foreach ($courses as $course) {
-            $summaryModeusId = $this->extract_modeus_id_from_summary($course->summary ?? null);
+            if (isset($copyRestoreTargets[(int) $course->id])) {
+                mtrace("Курс Moodle id: ({$course->id}) является целью копирования и не будет удалён как дубль");
+                continue;
+            }
+
+            $summaryModeusId = course_reference::extract_modeus_id($course->summary ?? null);
             $courseModeusId = $summaryModeusId ?? trim((string) ($course->idnumber ?? ''));
 
             if ($courseModeusId === '' || !isset($requestedIds[$courseModeusId])) {

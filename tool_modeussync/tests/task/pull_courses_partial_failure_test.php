@@ -177,6 +177,10 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertCount(1, $result['courses']);
         $this->assertSame((int) $course->id, $result['courses'][0]['id_lms']);
         $this->assertSame('valid-modeus-id', $result['courses'][0]['id_modeus']);
+        $this->assertSame(
+            'valid-modeus-id',
+            $DB->get_field('course', 'idnumber', ['id' => $course->id], MUST_EXIST)
+        );
         $this->assertSame(1, $DB->count_records('course', [
             'summary' => 'Курс создан по РМУП [valid-modeus-id]',
         ]));
@@ -215,7 +219,44 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertTrue($DB->record_exists('course', ['id' => $oldest->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $older->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $newer->id]));
+        $this->assertSame(
+            'valid-modeus-id',
+            $DB->get_field('course', 'idnumber', ['id' => $oldest->id], MUST_EXIST)
+        );
         $this->assertSame(1, $DB->count_records('course', ['summary' => $summary]));
+    }
+
+    public function test_course_copy_restore_target_is_not_deleted_as_duplicate(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
+        $this->resetAfterTest();
+        $this->setAdminUser();
+        $category = $this->getDataGenerator()->create_category();
+        $summary = 'Курс создан по РМУП [valid-modeus-id]';
+        $original = $this->getDataGenerator()->create_course([
+            'category' => $category->id,
+            'idnumber' => 'valid-modeus-id',
+            'summary' => $summary,
+        ]);
+        $copy = $this->getDataGenerator()->create_course([
+            'category' => $category->id,
+            'idnumber' => 'intentional-copy',
+            'summary' => $summary,
+        ]);
+        $DB->set_field('course', 'timecreated', 100, ['id' => $original->id]);
+        $DB->set_field('course', 'timecreated', 200, ['id' => $copy->id]);
+        $this->insert_copy_restore_controller((int) $copy->id);
+
+        $result = (new testable_pull_courses_partial_failure())->create_for_test(
+            [$this->valid_prototype()],
+            (int) $category->id
+        );
+
+        $this->assertFalse($result['failed']);
+        $this->assertSame((int) $original->id, $result['courses'][0]['id_lms']);
+        $this->assertTrue($DB->record_exists('course', ['id' => $original->id]));
+        $this->assertTrue($DB->record_exists('course', ['id' => $copy->id]));
     }
 
     public function test_lower_course_id_breaks_equal_timecreated_duplicate_tie(): void {
@@ -324,6 +365,10 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertSame((int) $summarymatch->id, $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $idnumberonly->id]));
         $this->assertTrue($DB->record_exists('course', ['id' => $summarymatch->id]));
+        $this->assertSame(
+            'valid-modeus-id',
+            $DB->get_field('course', 'idnumber', ['id' => $summarymatch->id], MUST_EXIST)
+        );
     }
 
     public function test_failed_duplicate_deletion_does_not_block_other_courses_from_sync(): void {
@@ -571,5 +616,29 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         if (!$DB->record_exists('modules', ['name' => 'attendance'])) {
             $this->markTestSkipped('mod_attendance is not installed in the test Moodle instance');
         }
+    }
+
+    private function insert_copy_restore_controller(int $courseid): void {
+        global $DB, $USER;
+
+        $now = time();
+        $DB->insert_record('backup_controllers', (object) [
+            'backupid' => md5('modeussync-copy-' . $courseid),
+            'operation' => \backup::OPERATION_RESTORE,
+            'type' => \backup::TYPE_1COURSE,
+            'itemid' => $courseid,
+            'format' => \backup::FORMAT_MOODLE,
+            'interactive' => \backup::INTERACTIVE_NO,
+            'purpose' => \backup::MODE_COPY,
+            'userid' => $USER->id,
+            'status' => \backup::STATUS_EXECUTING,
+            'execution' => \backup::EXECUTION_DELAYED,
+            'executiontime' => 0,
+            'checksum' => md5('modeussync-copy-checksum-' . $courseid),
+            'timecreated' => $now,
+            'timemodified' => $now,
+            'progress' => 0.5,
+            'controller' => '',
+        ]);
     }
 }
