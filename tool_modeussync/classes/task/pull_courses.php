@@ -93,12 +93,22 @@ class pull_courses extends base_sync_job
         require_once $CFG->dirroot . "/course/lib.php";
         require_once $CFG->libdir . '/completionlib.php';
 
-        $getId = function ($course) {
-            return $course['id'];
-        };
+        $modeusIds = array();
+        foreach ($courses as $coursePrototype) {
+            $idModeus = $this->extract_modeus_id_from_summary($coursePrototype['summary'] ?? null);
+            if ($idModeus !== null) {
+                $modeusIds[$idModeus] = true;
+            }
+        }
 
-        $idnumbers = array_map($getId, $courses);
-        $existingCourses = courses_repository::get_courses_by_idnumbers($idnumbers);
+        $existingCourses = array();
+        if (!empty($modeusIds)) {
+            $existingCourses = array_merge(
+                array_values(courses_repository::get_courses_by_idnumbers(array_keys($modeusIds))),
+                array_values(courses_repository::get_courses_with_modeus_references())
+            );
+        }
+        $coursesByModeusId = $this->index_courses_by_modeus_id($existingCourses, array_keys($modeusIds));
 
         $resultcourses = array();
         $failed = false;
@@ -108,20 +118,29 @@ class pull_courses extends base_sync_job
             mtrace("Создаю курс [$fullname]...");
 
             try {
-                $idnumber = $coursePrototype['id'];
                 $idModeus = $this->extract_modeus_id_from_summary($coursePrototype['summary'] ?? null);
-                $existingCourse = $this->getCourseWithIdNumber($existingCourses, $idnumber);
+                if ($idModeus === null) {
+                    throw new \UnexpectedValueException(
+                        "Не удалось извлечь ID РМУП из описания курса [{$fullname}]"
+                    );
+                }
 
-                if ($existingCourse !== null) {
-                    mtrace("Курс с IDNumber = [$idnumber] уже существует, id: ({$existingCourse->id})");
+                $existingCourseGroup = $coursesByModeusId[$idModeus] ?? null;
+
+                if ($existingCourseGroup !== null) {
+                    $existingCourse = $existingCourseGroup['selected'];
+                    $this->delete_duplicate_courses(
+                        $idModeus,
+                        $existingCourse,
+                        $existingCourseGroup['duplicates']
+                    );
+                    $coursesByModeusId[$idModeus]['duplicates'] = array();
+
+                    mtrace("Курс с ID РМУП = [$idModeus] уже существует, id: ({$existingCourse->id})");
 
                     $this->ensure_attendance_module((int) $existingCourse->id);
 
-                    if ($idModeus === null) {
-                        mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
-                    } else {
-                        mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
-                    }
+                    mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
 
                     $resultcourses[] = array(
                         'id_lms' => (int)$existingCourse->id,
@@ -130,13 +149,18 @@ class pull_courses extends base_sync_job
                     continue;
                 }
 
-                $courseId = $this->create_course_transactionally($coursePrototype, $categoryId);
+                $courseId = $this->create_course_transactionally($coursePrototype, $categoryId, $idModeus);
+                $coursesByModeusId[$idModeus] = [
+                    'selected' => (object) [
+                        'id' => $courseId,
+                        'idnumber' => $idModeus,
+                        'summary' => $coursePrototype['summary'],
+                        'timecreated' => time(),
+                    ],
+                    'duplicates' => array(),
+                ];
 
-                if ($idModeus === null) {
-                    mtrace("Предупреждение: не удалось извлечь idModeus из описания курса [$fullname]");
-                } else {
-                    mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
-                }
+                mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
 
                 $resultcourses[] = array(
                     'id_lms' => $courseId,
@@ -160,13 +184,13 @@ class pull_courses extends base_sync_job
      * Moodle's rollback() rethrows the supplied exception. Keeping this boundary in a
      * helper lets create_courses() catch that rethrow and continue with the next course.
      */
-    private function create_course_transactionally(array $coursePrototype, int $categoryId): int
+    private function create_course_transactionally(array $coursePrototype, int $categoryId, string $idModeus): int
     {
         global $DB;
 
         $transaction = $DB->start_delegated_transaction();
         try {
-            $course = $this->createCourse($coursePrototype, $categoryId);
+            $course = $this->createCourse($coursePrototype, $categoryId, $idModeus);
             $courseId = (int) create_course((object) $course)->id;
             $this->create_sections($coursePrototype['sections'], $courseId);
             $this->ensure_attendance_module($courseId);
@@ -191,6 +215,104 @@ class pull_courses extends base_sync_job
         }
 
         return null;
+    }
+
+    /**
+     * Индексирует существующие курсы по идентификатору РМУП и выбирает самый старый курс.
+     */
+    private function index_courses_by_modeus_id(array $courses, array $requestedModeusIds): array
+    {
+        $requestedIds = array_fill_keys($requestedModeusIds, true);
+        $groupedCourses = array();
+
+        foreach ($courses as $course) {
+            $summaryModeusId = $this->extract_modeus_id_from_summary($course->summary ?? null);
+            $courseModeusId = $summaryModeusId ?? trim((string) ($course->idnumber ?? ''));
+
+            if ($courseModeusId === '' || !isset($requestedIds[$courseModeusId])) {
+                continue;
+            }
+
+            $groupedCourses[$courseModeusId][(int) $course->id] = [
+                'course' => $course,
+                'summarymatch' => $summaryModeusId === $courseModeusId,
+            ];
+        }
+
+        $coursesByModeusId = array();
+        foreach ($groupedCourses as $idModeus => $courseMap) {
+            $candidates = array_values($courseMap);
+            usort($candidates, static function ($left, $right): int {
+                $timeComparison = (int) $left['course']->timecreated <=> (int) $right['course']->timecreated;
+                if ($timeComparison !== 0) {
+                    return $timeComparison;
+                }
+
+                return (int) $left['course']->id <=> (int) $right['course']->id;
+            });
+
+            $summaryCandidates = array_values(array_filter(
+                $candidates,
+                static function (array $candidate): bool {
+                    return $candidate['summarymatch'];
+                }
+            ));
+            $selectedCandidate = $summaryCandidates[0] ?? $candidates[0];
+            $duplicateCourses = array_slice($summaryCandidates, 1);
+
+            $coursesByModeusId[$idModeus] = [
+                'selected' => $selectedCandidate['course'],
+                'duplicates' => array_map(static function (array $candidate): \stdClass {
+                    return $candidate['course'];
+                }, $duplicateCourses),
+            ];
+        }
+
+        return $coursesByModeusId;
+    }
+
+    /**
+     * Safely removes every non-selected Moodle course that has the same RMUP identifier.
+     */
+    private function delete_duplicate_courses(
+        string $idModeus,
+        \stdClass $selectedCourse,
+        array $duplicateCourses
+    ): void {
+        if (empty($duplicateCourses)) {
+            return;
+        }
+
+        $duplicateCourseIds = array_map(static function ($course): int {
+            return (int) $course->id;
+        }, $duplicateCourses);
+
+        mtrace(
+            "Предупреждение: для ID РМУП [{$idModeus}] найдено несколько курсов Moodle. " .
+            "Используется самый старый курс, id: ({$selectedCourse->id}); " .
+            "дубли будут удалены: [" . implode(', ', $duplicateCourseIds) . "]"
+        );
+
+        foreach ($duplicateCourses as $duplicateCourse) {
+            $duplicateCourseId = (int) $duplicateCourse->id;
+            mtrace("Удаляю дублирующий курс Moodle, id: ({$duplicateCourseId})...");
+
+            if (!$this->delete_duplicate_course($duplicateCourseId)) {
+                throw new \UnexpectedValueException(
+                    "Не удалось удалить дублирующий курс Moodle, id: ({$duplicateCourseId})"
+                );
+            }
+
+            mtrace("Дублирующий курс Moodle удалён, id: ({$duplicateCourseId})");
+        }
+    }
+
+    /**
+     * Uses Moodle's course deletion API so modules, contexts, grades, and plugin observers are processed.
+     */
+    protected function delete_duplicate_course(int $courseid): bool
+    {
+        return delete_course($courseid, false);
     }
 
     protected function create_sync_response_ingestor(): sync_response_ingestor
@@ -262,18 +384,7 @@ class pull_courses extends base_sync_job
         return $value;
     }
 
-    private function getCourseWithIdNumber($courses, $idnumber)
-    {
-        foreach ($courses as $k) {
-            if ($k->idnumber == $idnumber) {
-                return $k;
-            }
-        }
-
-        return null;
-    }
-
-    private function createCourse($coursePrototype, $categoryId)
+    private function createCourse($coursePrototype, $categoryId, string $idModeus)
     {
         $course = array();
 
@@ -283,7 +394,7 @@ class pull_courses extends base_sync_job
             $course['enablecompletion'] = 0;
         }
 
-        $course['idnumber'] = $coursePrototype['id'];
+        $course['idnumber'] = $idModeus;
         $course['fullname'] = $coursePrototype['name'];
         $course['shortname'] = $this->get_available_shortname($coursePrototype['name']);
         $course['summary'] = $coursePrototype['summary'];
