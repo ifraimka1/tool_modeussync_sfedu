@@ -452,7 +452,7 @@ class pull_courses extends base_sync_job
      */
     private function ensure_attendance_module(int $courseid): void
     {
-        global $DB;
+        global $CFG, $DB;
 
         $attendancemodule = $DB->get_record('modules', ['name' => 'attendance']);
         if ($attendancemodule === false) {
@@ -468,14 +468,24 @@ class pull_courses extends base_sync_job
             return;
         }
 
-        create_module((object) [
+        require_once($CFG->dirroot . '/course/modlib.php');
+
+        $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+        $moduleinfo = (object) [
             'modulename' => 'attendance',
+            'module' => $attendancemodule->id,
             'name' => get_string('modulename', 'mod_attendance'),
-            'course' => $courseid,
+            'intro' => '',
+            'introformat' => FORMAT_HTML,
             'section' => 0,
             'visible' => 1,
-            'grade' => 100,
-        ]);
+            'visibleoncoursepage' => 1,
+            'cmidnumber' => '',
+            'groupmode' => NOGROUPS,
+            'groupingid' => 0,
+        ];
+
+        add_moduleinfo($moduleinfo, $course);
     }
 
     private function create_modules($modules, $courseid, $sectionid)
