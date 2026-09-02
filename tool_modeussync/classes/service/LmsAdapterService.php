@@ -7,6 +7,8 @@ use GuzzleHttp\Exception\RequestException;
 // Сервис, получающий данные из LmsAdapter
 class LmsAdapterService
 {
+    private const MAX_LOG_VALUE_LENGTH = 4096;
+
     private LmsAdapterHttpClient $lmsHttpClient;
 
     private string $lmsId;
@@ -55,7 +57,62 @@ class LmsAdapterService
 
     public function closeSession(string $id)
     {
-        $this->lmsHttpClient->httpPost("api/v1/lms/{$this->lmsId}/sync-sessions/$id/close", [], null);
+        try {
+            $response = $this->lmsHttpClient->httpPost(
+                "api/v1/lms/{$this->lmsId}/sync-sessions/$id/close",
+                [],
+                null
+            );
+        } catch (RequestException $e) {
+            $errorresponse = $e->getResponse();
+            $httpstatus = $errorresponse === null ? 'unknown' : $errorresponse->getStatusCode();
+            $responsebody = $errorresponse === null ? null : (string) $errorresponse->getBody();
+
+            $this->trace_close_session_response($httpstatus, $responsebody);
+            throw $e;
+        }
+
+        $httpstatus = $response['status'] ?? 'unknown';
+        $this->trace_close_session_response($httpstatus, $response['body'] ?? null);
+    }
+
+    private function trace_close_session_response($httpstatus, $responsebody): void
+    {
+        mtrace('LmsAdapter close session HTTP status: ' . $httpstatus);
+        mtrace(
+            'LmsAdapter close session response body: ' .
+            $this->format_log_value($this->encode_log_value($responsebody))
+        );
+    }
+
+    private function encode_log_value($value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if (is_string($value)) {
+            return $value;
+        }
+
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false) {
+            return 'json_encode error: ' . json_last_error_msg();
+        }
+
+        return $encoded;
+    }
+
+    private function format_log_value(string $value): string
+    {
+        $length = strlen($value);
+        if ($length <= self::MAX_LOG_VALUE_LENGTH) {
+            return $value;
+        }
+
+        return 'length: ' . $length . ' bytes; preview: ' .
+            mb_strcut($value, 0, self::MAX_LOG_VALUE_LENGTH, 'UTF-8') .
+            '... [truncated]';
     }
 
     private function getLmsId(): string
