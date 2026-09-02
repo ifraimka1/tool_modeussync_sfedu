@@ -7,9 +7,11 @@ use tool_modeussync\service\SyncService;
 use tool_modeussync\task\pull_courses;
 use tool_modeussync\local\queue\queue_repository;
 
-/** LmsAdapter test double replacing only external course retrieval. */
+/** LmsAdapter test double for course retrieval and sync-session lifecycle. */
 final class pull_courses_test_lms_adapter_service extends LmsAdapterService {
     public array $courses = [];
+
+    public array $closedSessionIds = [];
 
     public function __construct() {
     }
@@ -17,14 +19,39 @@ final class pull_courses_test_lms_adapter_service extends LmsAdapterService {
     public function getCoursesToCreate(string $sessionId): array {
         return $this->courses;
     }
+
+    public function getLastClosedSession(string $syncSessionType): ?array {
+        return null;
+    }
+
+    public function openSession(string $syncSessionType, \DateTime $externalCreatedAt): array {
+        return ['id' => 'session-1'];
+    }
+
+    public function closeSession(string $id) {
+        $this->closedSessionIds[] = $id;
+    }
 }
 
-/** SyncService test double returning a complete response for received courses. */
+/** Configurable SyncService test double for successful and failed requests. */
 final class pull_courses_test_sync_service extends SyncService {
     public array $batches = [];
 
+    public ?Throwable $exception = null;
+
+    public ?array $response = null;
+
     public function send_created_courses(array $courses): array {
         $this->batches[] = $courses;
+
+        if ($this->exception !== null) {
+            throw $this->exception;
+        }
+
+        if ($this->response !== null) {
+            return $this->response;
+        }
+
         return [
             'results' => array_map(static function(array $course): array {
                 return [
@@ -50,6 +77,10 @@ final class testable_pull_courses_partial_failure extends pull_courses {
 
     public function set_sync_service(SyncService $service): void {
         $this->syncservice = $service;
+    }
+
+    protected function create_lms_adapter_service(): LmsAdapterService {
+        return $this->lmsAdapterService;
     }
 
     public function create_for_test(array $courses, int $categoryid): array {
@@ -502,6 +533,60 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $this->assertTrue($task->do_work(['id' => 'session-1'], null));
         $this->assertCount(1, $syncservice->batches);
+    }
+
+    public function test_execute_closes_session_when_new_course_request_fails_after_course_creation(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        set_config('default_category', $category->id, 'tool_modeussync');
+        $adapter = new pull_courses_test_lms_adapter_service();
+        $adapter->courses = [$this->valid_prototype()];
+        $syncservice = new pull_courses_test_sync_service();
+        $syncservice->exception = new RuntimeException('Deliberate /new-course failure');
+        $task = new testable_pull_courses_partial_failure();
+        $task->set_lms_adapter_service($adapter);
+        $task->set_sync_service($syncservice);
+
+        $task->execute();
+
+        $this->assertTrue($DB->record_exists('course', ['idnumber' => 'valid-modeus-id']));
+        $this->assertSame(['session-1'], $adapter->closedSessionIds);
+    }
+
+    public function test_execute_closes_session_when_new_course_response_processing_fails(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        set_config('default_category', $category->id, 'tool_modeussync');
+        $adapter = new pull_courses_test_lms_adapter_service();
+        $adapter->courses = [$this->valid_prototype()];
+        $syncservice = new pull_courses_test_sync_service();
+        $syncservice->response = ['queued' => true];
+        $task = new testable_pull_courses_partial_failure();
+        $task->set_lms_adapter_service($adapter);
+        $task->set_sync_service($syncservice);
+
+        $task->execute();
+
+        $this->assertTrue($DB->record_exists('course', ['idnumber' => 'valid-modeus-id']));
+        $this->assertSame(['session-1'], $adapter->closedSessionIds);
+    }
+
+    public function test_execute_does_not_close_session_when_course_creation_fails(): void {
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        set_config('default_category', $category->id, 'tool_modeussync');
+        $adapter = new pull_courses_test_lms_adapter_service();
+        $adapter->courses = [$this->invalid_prototype()];
+        $task = new testable_pull_courses_partial_failure();
+        $task->set_lms_adapter_service($adapter);
+
+        $task->execute();
+
+        $this->assertSame([], $adapter->closedSessionIds);
     }
 
     public function test_chat_prototype_is_skipped_without_failing_course_creation(): void {

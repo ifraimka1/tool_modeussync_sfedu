@@ -67,13 +67,21 @@ class pull_courses extends base_sync_job
                         $syncResponse = $syncService->send_created_courses($coursesBatch);
                     } catch (Throwable $e) {
                         $this->trace_throwable("Ошибка при отправке batch {$batchNumber}/{$batchCount} в SyncService", $e);
-                        throw $e;
+                        continue;
                     }
 
                     mtrace("Отправлены данные о курсах во внешний сервис, batch {$batchNumber}/{$batchCount}");
                     mtrace("Ответ SyncService batch {$batchNumber}/{$batchCount}: " . $this->format_log_value($this->encode_log_value($syncResponse)));
 
-                    $changedqueues = $this->process_sync_response($syncResponse);
+                    try {
+                        $changedqueues = $this->process_sync_response($syncResponse);
+                    } catch (Throwable $e) {
+                        $this->trace_throwable(
+                            "Ошибка при обработке ответа SyncService batch {$batchNumber}/{$batchCount}",
+                            $e
+                        );
+                        continue;
+                    }
                     mtrace(
                         "Сохранено или обновлено очередей заданий, batch {$batchNumber}/{$batchCount}: " .
                         count($changedqueues)

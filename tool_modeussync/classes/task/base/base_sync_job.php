@@ -26,7 +26,7 @@ abstract class base_sync_job extends scheduled_task
 
         mtrace("\n## Инициализируем фоновую задачу: \"{$current_task_name}\"");
         mtrace("Текущее системное время: {$started_date}");
-        $this->lmsAdapterService = new LmsAdapterService();
+        $this->lmsAdapterService = $this->create_lms_adapter_service();
 
         mtrace("\n## Получаем последнюю закрытую сессию с типом '{$syncSessionType}'...");
         $lastClosedSession = $this->lmsAdapterService->getLastClosedSession($syncSessionType);
@@ -68,6 +68,11 @@ abstract class base_sync_job extends scheduled_task
         }
 
         $this->log_results($started);
+    }
+
+    protected function create_lms_adapter_service(): LmsAdapterService
+    {
+        return new LmsAdapterService();
     }
 
     private function log_results($started)
