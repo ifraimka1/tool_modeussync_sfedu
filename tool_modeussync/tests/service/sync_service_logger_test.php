@@ -85,7 +85,7 @@ final class sync_service_logger_test extends advanced_testcase {
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $result = (new testable_sync_service($logger, $curl))->send_created_courses([
-            ['id_lms' => 12, 'id_modeus' => 'modeus-course-1'],
+            ['id_lms' => 'rmup-course-12', 'id_modeus' => 'modeus-course-1'],
         ]);
         $log = implode("\n", $logger->messages);
 
@@ -157,7 +157,7 @@ final class sync_service_logger_test extends advanced_testcase {
 
         $this->expectException(moodle_exception::class);
         (new testable_sync_service(new collecting_sync_logger(), $curl))->send_created_courses([
-            ['id_lms' => 12, 'id_modeus' => 'modeus-course-1'],
+            ['id_lms' => 'rmup-course-12', 'id_modeus' => 'modeus-course-1'],
         ]);
     }
 
@@ -171,7 +171,7 @@ final class sync_service_logger_test extends advanced_testcase {
 
         try {
             (new testable_sync_service($logger, $curl))->send_created_courses([
-                ['id_lms' => 12, 'id_modeus' => 'modeus-course-1'],
+                ['id_lms' => 'rmup-course-12', 'id_modeus' => 'modeus-course-1'],
             ]);
             $this->fail('Expected sanitized moodle_exception was not thrown.');
         } catch (moodle_exception $exception) {
@@ -192,7 +192,7 @@ final class sync_service_logger_test extends advanced_testcase {
 
         try {
             (new testable_sync_service($logger, $curl))->send_created_courses([
-                ['id_lms' => 12, 'id_modeus' => 'modeus-course-1'],
+                ['id_lms' => 'rmup-course-12', 'id_modeus' => 'modeus-course-1'],
             ]);
             $this->fail('Expected sanitized moodle_exception was not thrown.');
         } catch (moodle_exception $exception) {

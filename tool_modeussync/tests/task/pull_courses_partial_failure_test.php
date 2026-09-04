@@ -129,6 +129,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertFalse($result['failed']);
         $this->assertCount(1, $result['courses']);
         $course = $DB->get_record('course', ['idnumber' => 'valid-modeus-id'], '*', MUST_EXIST);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertSame('Valid course', $course->fullname);
         $this->assertSame('Valid course', $course->shortname);
         $this->assertSame('Курс создан по РМУП [valid-modeus-id]', $course->summary);
@@ -147,6 +148,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
     }
 
     public function test_new_course_gets_one_attendance_in_general_section(): void {
+        global $DB;
+
         $this->resetAfterTest();
         $this->require_attendance_plugin();
         $category = $this->getDataGenerator()->create_category();
@@ -154,7 +157,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
 
-        $courseid = (int) $result['courses'][0]['id_lms'];
+        $courseid = (int) $DB->get_field('course', 'id', ['idnumber' => $result['courses'][0]['id_lms']], MUST_EXIST);
         $this->assertSame(1, $this->count_attendance_modules($courseid, 0));
         $this->assertSame(1, $this->count_attendance_modules($courseid));
     }
@@ -206,7 +209,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $this->assertFalse($result['failed']);
         $this->assertCount(1, $result['courses']);
-        $this->assertSame((int) $course->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertSame('valid-modeus-id', $result['courses'][0]['id_modeus']);
         $this->assertSame(
             'valid-modeus-id',
@@ -246,7 +249,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
 
         $this->assertFalse($result['failed']);
-        $this->assertSame((int) $oldest->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $oldest->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $older->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $newer->id]));
@@ -285,7 +288,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         );
 
         $this->assertFalse($result['failed']);
-        $this->assertSame((int) $original->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $original->id]));
         $this->assertTrue($DB->record_exists('course', ['id' => $copy->id]));
     }
@@ -314,7 +317,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $this->assertFalse($result['failed']);
         $this->assertGreaterThan((int) $lowerid->id, (int) $higherid->id);
-        $this->assertSame((int) $lowerid->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $lowerid->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $higherid->id]));
     }
@@ -362,7 +365,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
 
         $this->assertFalse($result['failed']);
-        $this->assertSame((int) $older->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $older->id]));
         $this->assertFalse($DB->record_exists('course', ['id' => $newer->id]));
         $this->assertFalse($DB->record_exists('course_modules', ['id' => $coursemoduleid]));
@@ -393,7 +396,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
 
         $this->assertFalse($result['failed']);
-        $this->assertSame((int) $summarymatch->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
         $this->assertTrue($DB->record_exists('course', ['id' => $idnumberonly->id]));
         $this->assertTrue($DB->record_exists('course', ['id' => $summarymatch->id]));
         $this->assertSame(
@@ -495,7 +498,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertCount(1, $result['courses']);
         $this->assertFalse($DB->record_exists('course', ['idnumber' => 'invalid-modeus-id']));
         $validcourse = $DB->get_record('course', ['idnumber' => 'valid-modeus-id'], '*', MUST_EXIST);
-        $this->assertSame((int) $validcourse->id, $result['courses'][0]['id_lms']);
+        $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
     }
 
     public function test_do_work_processes_successful_courses_but_returns_false_after_partial_failure(): void {

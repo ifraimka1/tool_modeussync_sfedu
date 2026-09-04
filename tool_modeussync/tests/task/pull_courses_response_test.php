@@ -30,8 +30,8 @@ final class pull_courses_response_test extends advanced_testcase {
         global $DB;
 
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $queues = (new testable_pull_courses())->process($this->response($course->id));
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $queues = (new testable_pull_courses())->process($this->response($course->idnumber));
         $queue = (new queue_repository())->get_course_queue($course->id);
 
         $this->assertCount(1, $queues);
@@ -55,8 +55,8 @@ final class pull_courses_response_test extends advanced_testcase {
      */
     public function test_unsuccessful_result_throws(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $response = $this->response($course->id);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $response = $this->response($course->idnumber);
         $response['results'][0]['success'] = false;
 
         $this->expectException(\UnexpectedValueException::class);
@@ -68,8 +68,8 @@ final class pull_courses_response_test extends advanced_testcase {
      */
     public function test_empty_course_data_creates_no_queue(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $response = $this->response($course->id);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $response = $this->response($course->idnumber);
         $response['results'][0]['courseData'] = [];
 
         $queues = (new testable_pull_courses())->process($response);
@@ -90,14 +90,14 @@ final class pull_courses_response_test extends advanced_testcase {
     }
 
     /**
-     * @param int $courseid Moodle course id.
+     * @param string $idnumber Moodle course idnumber.
      * @return array
      */
-    private function response(int $courseid): array {
+    private function response(string $idnumber): array {
         return [
             'results' => [[
                 'success' => true,
-                'id_lms' => $courseid,
+                'id_lms' => $idnumber,
                 'id_modeus' => 'modeus-course-1',
                 'courseData' => [
                     ['id' => 'meeting-1', 'name' => 'Контрольная работа', 'grade' => 25],

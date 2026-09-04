@@ -14,14 +14,56 @@ use tool_modeussync\local\queue\target_module;
  */
 class sync_response_ingestor_test extends advanced_testcase {
 
+    public function test_numeric_idnumber_resolves_by_idnumber_not_internal_id(): void {
+        $this->resetAfterTest();
+        $othercourse = $this->getDataGenerator()->create_course(['idnumber' => 'other-rmup']);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => (string) $othercourse->id]);
+
+        $queues = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber));
+
+        $this->assertSame((int) $course->id, (int) $queues[0]->courseid);
+        $this->assertNull((new queue_repository())->get_course_queue($othercourse->id));
+    }
+
+    public function test_unknown_idnumber_does_not_fall_back_to_internal_id(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'known-rmup']);
+
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('The referenced Moodle course does not exist.');
+        (new sync_response_ingestor())->ingest($this->successful_response((string) $course->id));
+    }
+
+    public function test_duplicate_idnumber_is_rejected(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->getDataGenerator()->create_course(['idnumber' => 'duplicate-rmup']);
+        $second = $this->getDataGenerator()->create_course(['idnumber' => 'other-rmup']);
+        $DB->set_field('course', 'idnumber', 'duplicate-rmup', ['id' => $second->id]);
+
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('The referenced Moodle course idnumber is ambiguous.');
+        (new sync_response_ingestor())->ingest($this->successful_response('duplicate-rmup'));
+    }
+
+    public function test_empty_idnumber_is_rejected(): void {
+        $this->resetAfterTest();
+        $this->getDataGenerator()->create_course(['idnumber' => '']);
+
+        $this->expectException(\UnexpectedValueException::class);
+        $this->expectExceptionMessage('The new-course result has invalid course identifiers.');
+        (new sync_response_ingestor())->ingest($this->successful_response(''));
+    }
+
     /**
      * A successful response creates a queue and pending assign items.
      */
     public function test_ingest_creates_queue_and_items_with_assign_default(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
 
-        $queues = (new sync_response_ingestor())->ingest($this->successful_response($course->id));
+        $queues = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber));
         $repository = new queue_repository();
         $items = $repository->get_items($queues[0]->id);
 
@@ -42,13 +84,13 @@ class sync_response_ingestor_test extends advanced_testcase {
         global $DB;
 
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $ingestor = new sync_response_ingestor();
 
-        $firstqueues = $ingestor->ingest($this->successful_response($course->id));
+        $firstqueues = $ingestor->ingest($this->successful_response($course->idnumber));
         $firstqueues[0]->timemodified = time() - 10;
         $DB->update_record('tool_modeussync_course_queue', $firstqueues[0]);
-        $secondqueues = $ingestor->ingest($this->successful_response($course->id));
+        $secondqueues = $ingestor->ingest($this->successful_response($course->idnumber));
         $repository = new queue_repository();
         $items = $repository->get_items($firstqueues[0]->id);
         $queue = $repository->get_course_queue($course->id);
@@ -63,14 +105,14 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_pending_item_updates_name_and_grade_but_preserves_quiz_selection(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
         $items = $repository->get_items($queue->id);
         $repository->save_target_modules($queue->id, [$items[0]->id => target_module::QUIZ]);
 
-        $response = $this->successful_response($course->id);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'][0]['name'] = 'Обновлённая контрольная работа';
         $response['results'][0]['courseData'][0]['grade'] = 30;
         $ingestor->ingest($response);
@@ -87,15 +129,15 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_created_item_is_not_reopened_by_identical_response(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
         $item = $repository->get_items($queue->id)[0];
         $repository->mark_item_created($item->id, 42, $user->id, target_module::QUIZ);
 
-        $ingestor->ingest($this->successful_response($course->id));
+        $ingestor->ingest($this->successful_response($course->idnumber));
         $item = $repository->get_item($item->id);
 
         $this->assertSame(item_status::CREATED, $item->status);
@@ -111,10 +153,10 @@ class sync_response_ingestor_test extends advanced_testcase {
         global $DB;
 
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
         $items = $repository->get_items($queue->id);
 
@@ -134,7 +176,7 @@ class sync_response_ingestor_test extends advanced_testcase {
         $DB->update_record('tool_modeussync_queue_items', $firstitem);
         $oldpayload = $firstitem->payloadjson;
 
-        $response = $this->successful_response($course->id);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'][0]['diagnostic'] = 'updated';
         $changedqueues = $ingestor->ingest($response);
         $updated = $repository->get_item($firstitem->id);
@@ -158,10 +200,10 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_omitted_pending_item_keeps_course_pending(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
-        $response = $this->successful_response($course->id);
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
+        $response = $this->successful_response($course->idnumber);
         array_pop($response['results'][0]['courseData']);
 
         $ingestor->ingest($response);
@@ -177,10 +219,10 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_identical_all_created_response_preserves_synced_state(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
 
         foreach ($repository->get_items($queue->id) as $item) {
@@ -189,7 +231,7 @@ class sync_response_ingestor_test extends advanced_testcase {
         $synctime = time() - 50;
         $repository->mark_course_synced($queue->id, $synctime);
 
-        $changedqueues = $ingestor->ingest($this->successful_response($course->id));
+        $changedqueues = $ingestor->ingest($this->successful_response($course->idnumber));
         $queue = $repository->get_course_queue($course->id);
 
         $this->assertSame([], $changedqueues);
@@ -202,17 +244,17 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_omitted_created_item_reopens_synced_queue(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
 
         foreach ($repository->get_items($queue->id) as $item) {
             $repository->mark_item_created($item->id, $item->id + 100, $user->id, target_module::ASSIGN);
         }
         $repository->mark_course_synced($queue->id, time() - 50);
-        $response = $this->successful_response($course->id);
+        $response = $this->successful_response($course->idnumber);
         array_pop($response['results'][0]['courseData']);
 
         $changedqueues = $ingestor->ingest($response);
@@ -229,8 +271,8 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_generic_item_status_rejects_created_transition(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->id))[0];
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber))[0];
         $item = (new queue_repository())->get_items($queue->id)[0];
 
         $this->expectException(\invalid_parameter_exception::class);
@@ -242,9 +284,9 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_generic_item_status_cannot_reopen_created_item(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
-        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->id))[0];
+        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
         $item = $repository->get_items($queue->id)[0];
         $repository->mark_item_created($item->id, 42, $user->id, target_module::ASSIGN);
@@ -258,9 +300,9 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_mark_item_created_rejects_unsupported_module(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
-        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->id))[0];
+        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber))[0];
         $item = (new queue_repository())->get_items($queue->id)[0];
 
         $this->expectException(\invalid_parameter_exception::class);
@@ -272,8 +314,8 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_generic_course_status_rejects_synced_transition(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->id))[0];
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $queue = (new sync_response_ingestor())->ingest($this->successful_response($course->idnumber))[0];
 
         $this->expectException(\invalid_parameter_exception::class);
         (new queue_repository())->set_course_status($queue->id, course_status::SYNCED);
@@ -284,10 +326,10 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_new_item_reopens_synced_queue(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $user = $this->getDataGenerator()->create_user();
         $ingestor = new sync_response_ingestor();
-        $queue = $ingestor->ingest($this->successful_response($course->id))[0];
+        $queue = $ingestor->ingest($this->successful_response($course->idnumber))[0];
         $repository = new queue_repository();
 
         foreach ($repository->get_items($queue->id) as $item) {
@@ -295,7 +337,7 @@ class sync_response_ingestor_test extends advanced_testcase {
         }
         $repository->mark_course_synced($queue->id, time());
 
-        $response = $this->successful_response($course->id);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'][] = [
             'id' => 'meeting-3',
             'name' => 'Практическая работа',
@@ -319,11 +361,11 @@ class sync_response_ingestor_test extends advanced_testcase {
     }
 
     /**
-     * Course-level identifiers must name one whole Moodle course id.
+     * Course-level identifiers must contain a string idnumber.
      */
-    public function test_non_integer_course_id_throws(): void {
+    public function test_non_string_idnumber_throws(): void {
         $this->resetAfterTest();
-        $response = $this->successful_response(1);
+        $response = $this->successful_response('rmup-course-1');
         $response['results'][0]['id_lms'] = 1.5;
 
         $this->expectException(\UnexpectedValueException::class);
@@ -335,8 +377,8 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_invalid_item_is_stored_failed_and_blocks_sync(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $response = $this->successful_response($course->id);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'][0]['grade'] = 0;
 
         $queue = (new sync_response_ingestor())->ingest($response)[0];
@@ -351,8 +393,8 @@ class sync_response_ingestor_test extends advanced_testcase {
 
     public function test_external_id_longer_than_course_module_limit_is_stored_failed(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $response = $this->successful_response($course->id);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'] = [[
             'id' => str_repeat('x', 101),
             'name' => 'Задание с длинным идентификатором',
@@ -371,8 +413,8 @@ class sync_response_ingestor_test extends advanced_testcase {
 
     public function test_external_id_longer_than_queue_column_is_hashed_without_dml_failure(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
-        $response = $this->successful_response($course->id);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $response = $this->successful_response($course->idnumber);
         $response['results'][0]['courseData'] = [[
             'id' => str_repeat('x', 300),
             'name' => 'Задание с очень длинным идентификатором',
@@ -394,16 +436,16 @@ class sync_response_ingestor_test extends advanced_testcase {
      */
     public function test_event_is_triggered_only_when_course_has_course_data(): void {
         $this->resetAfterTest();
-        $course = $this->getDataGenerator()->create_course();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
         $sink = $this->redirectEvents();
         $ingestor = new sync_response_ingestor();
 
-        $emptyresponse = $this->successful_response($course->id);
+        $emptyresponse = $this->successful_response($course->idnumber);
         $emptyresponse['results'][0]['courseData'] = [];
         $ingestor->ingest($emptyresponse);
         $this->assertCount(0, $sink->get_events());
 
-        $ingestor->ingest($this->successful_response($course->id));
+        $ingestor->ingest($this->successful_response($course->idnumber));
         $events = $sink->get_events();
 
         $this->assertCount(1, $events);
@@ -416,14 +458,14 @@ class sync_response_ingestor_test extends advanced_testcase {
     /**
      * Builds the expected successful new-course response.
      *
-     * @param int $courseid Moodle course id.
+     * @param string $idnumber Moodle course idnumber.
      * @return array
      */
-    private function successful_response(int $courseid): array {
+    private function successful_response(string $idnumber): array {
         return [
             'results' => [[
                 'success' => true,
-                'id_lms' => $courseid,
+                'id_lms' => $idnumber,
                 'id_modeus' => 'modeus-course-1',
                 'courseData' => [
                     [

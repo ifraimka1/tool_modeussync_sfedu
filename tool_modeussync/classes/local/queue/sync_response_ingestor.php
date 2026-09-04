@@ -36,10 +36,15 @@ final class sync_response_ingestor {
 
         $queues = [];
         foreach ($response['results'] as $result) {
-            [$courseid, $idmodeus] = $this->validate_course_result($result);
-            if (!$DB->record_exists('course', ['id' => $courseid])) {
+            [$idnumber, $idmodeus] = $this->validate_course_result($result);
+            $courses = $DB->get_records('course', ['idnumber' => $idnumber], '', 'id', 0, 2);
+            if (empty($courses)) {
                 throw new \UnexpectedValueException('The referenced Moodle course does not exist.');
             }
+            if (count($courses) !== 1) {
+                throw new \UnexpectedValueException('The referenced Moodle course idnumber is ambiguous.');
+            }
+            $courseid = (int) reset($courses)->id;
 
             $coursedata = $result['courseData'] ?? null;
             if (empty($coursedata)) {
@@ -126,20 +131,20 @@ final class sync_response_ingestor {
      * Validates the course-level result required for ingestion.
      *
      * @param mixed $result One SyncService result.
-     * @return array [Moodle course id, Modeus course id].
+     * @return array [Moodle course idnumber, Modeus course id].
      */
     private function validate_course_result($result): array {
         if (!is_array($result) || !array_key_exists('success', $result) || $result['success'] !== true) {
             throw new \UnexpectedValueException('The new-course result must be successful.');
         }
 
-        $courseid = $result['id_lms'] ?? null;
+        $idnumber = $result['id_lms'] ?? null;
         $idmodeus = $result['id_modeus'] ?? null;
-        if (filter_var($courseid, FILTER_VALIDATE_INT) === false || (int) $courseid <= 0 ||
+        if (!is_string($idnumber) || trim($idnumber) === '' ||
                 !is_scalar($idmodeus) || trim((string) $idmodeus) === '') {
             throw new \UnexpectedValueException('The new-course result has invalid course identifiers.');
         }
 
-        return [(int) $courseid, trim((string) $idmodeus)];
+        return [trim($idnumber), trim((string) $idmodeus)];
     }
 }

@@ -160,7 +160,7 @@ class pull_courses extends base_sync_job
                     mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
 
                     $resultcourses[] = array(
-                        'id_lms' => (int)$existingCourse->id,
+                        'id_lms' => (string) $existingCourse->idnumber,
                         'id_modeus' => $idModeus,
                     );
                     continue;
@@ -180,7 +180,7 @@ class pull_courses extends base_sync_job
                 mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
 
                 $resultcourses[] = array(
-                    'id_lms' => $courseId,
+                    'id_lms' => $idModeus,
                     'id_modeus' => $idModeus,
                 );
 

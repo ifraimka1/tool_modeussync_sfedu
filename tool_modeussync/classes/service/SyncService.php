@@ -78,7 +78,7 @@ class SyncService
      *
      * Формат payload:
      * [
-     *   ['id_lms' => 123, 'id_modeus' => 'uuid'],
+     *   ['id_lms' => 'moodle-course-idnumber', 'id_modeus' => 'uuid'],
      *   ...
      * ]
      *

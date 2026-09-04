@@ -572,7 +572,7 @@ final class creation_service_test extends advanced_testcase {
         $response = [
             'results' => [[
                 'success' => true,
-                'id_lms' => $course->id,
+                'id_lms' => $course->idnumber,
                 'id_modeus' => 'e2e-modeus-course',
                 'courseData' => [[
                     'id' => 'e2e-assign',
