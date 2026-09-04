@@ -2,8 +2,21 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+use tool_modeussync\repository\course_map_repository;
+
 /** Tests course lifecycle integration owned by tool_modeussync. */
 final class tool_modeussync_observer_test extends advanced_testcase {
+
+    public function test_course_deletion_removes_mapping_without_a_queue(): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/course/lib.php');
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $repository = new course_map_repository();
+        $repository->upsert((int) $course->id, 'rmup-1', 'prototype-1');
+        $this->assertTrue(delete_course($course, false));
+        $this->assertNull($repository->get_by_courseid((int) $course->id));
+    }
 
     public function test_course_copy_restore_detaches_modeus_reference_from_summary(): void {
         global $CFG, $DB;
@@ -15,6 +28,9 @@ final class tool_modeussync_observer_test extends advanced_testcase {
             'idnumber' => 'intentional-copy',
             'summary' => 'Описание до. Курс создан по РМУП [modeus-course-1] Описание после.',
         ]);
+        $repository = new course_map_repository();
+        $repository->upsert((int) $source->id, 'source-rmup', 'source-prototype');
+        $repository->upsert((int) $copy->id, 'copy-rmup', 'copy-prototype');
         $event = \core\event\course_restored::create([
             'objectid' => $copy->id,
             'context' => context_course::instance($copy->id),
@@ -29,6 +45,14 @@ final class tool_modeussync_observer_test extends advanced_testcase {
         ]);
 
         \tool_modeussync\observer::course_restored($event);
+
+        $this->assertNull($repository->get_by_courseid((int) $copy->id));
+        $this->assertSame('source-prototype', $repository->get_by_courseid((int) $source->id)->prototypeid);
+
+        // A copied target must detach even if its summary no longer has an RMUP marker.
+        $repository->upsert((int) $copy->id, 'copy-rmup', 'copy-prototype');
+        \tool_modeussync\observer::course_restored($event);
+        $this->assertNull($repository->get_by_courseid((int) $copy->id));
 
         $summary = $DB->get_field('course', 'summary', ['id' => $copy->id], MUST_EXIST);
         $this->assertStringNotContainsString('Курс создан по РМУП', $summary);
@@ -48,6 +72,8 @@ final class tool_modeussync_observer_test extends advanced_testcase {
         $course = $this->getDataGenerator()->create_course([
             'summary' => 'Курс создан по РМУП [modeus-course-1]',
         ]);
+        $repository = new course_map_repository();
+        $repository->upsert((int) $course->id, 'modeus-course-1', 'prototype-1');
         $event = \core\event\course_restored::create([
             'objectid' => $course->id,
             'context' => context_course::instance($course->id),
@@ -66,5 +92,6 @@ final class tool_modeussync_observer_test extends advanced_testcase {
             'Курс создан по РМУП [modeus-course-1]',
             $DB->get_field('course', 'summary', ['id' => $course->id], MUST_EXIST)
         );
+        $this->assertSame('prototype-1', $repository->get_by_courseid((int) $course->id)->prototypeid);
     }
 }

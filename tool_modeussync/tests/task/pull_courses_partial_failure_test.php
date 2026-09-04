@@ -6,6 +6,7 @@ use tool_modeussync\service\LmsAdapterService;
 use tool_modeussync\service\SyncService;
 use tool_modeussync\task\pull_courses;
 use tool_modeussync\local\queue\queue_repository;
+use tool_modeussync\repository\course_map_repository;
 
 /** LmsAdapter test double for course retrieval and sync-session lifecycle. */
 final class pull_courses_test_lms_adapter_service extends LmsAdapterService {
@@ -106,6 +107,68 @@ final class testable_pull_courses_partial_failure extends pull_courses {
 
 /** Tests that one broken prototype does not block valid courses. */
 final class pull_courses_partial_failure_test extends advanced_testcase {
+
+    public function test_repeat_request_replaces_prototype_and_reuses_mapping_after_course_fields_change(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+        $prototype = $this->valid_prototype();
+        $this->assertFalse($task->create_for_test([$prototype], (int) $category->id)['failed']);
+        $courseid = (int) $DB->get_field('course', 'id', ['idnumber' => 'valid-modeus-id'], MUST_EXIST);
+        $DB->set_field('course', 'summary', '', ['id' => $courseid]);
+        $DB->set_field('course', 'idnumber', 'edited-idnumber', ['id' => $courseid]);
+        $prototype['id'] = 'adapter-second';
+        $result = $task->create_for_test([$prototype], (int) $category->id);
+        $this->assertFalse($result['failed']);
+        $map = (new course_map_repository())->get_by_courseid($courseid);
+        $this->assertNotNull($map);
+        $this->assertSame('adapter-second', $map->prototypeid);
+        $this->assertSame('valid-modeus-id', $map->rmupid);
+        $this->assertSame(1, $DB->count_records('tool_modeussync_course_map'));
+        $this->assertSame($courseid, (int) $DB->get_field('course', 'id', ['idnumber' => 'valid-modeus-id'], MUST_EXIST));
+        $this->assertSame([['id_lms' => 'valid-modeus-id', 'id_modeus' => 'valid-modeus-id']], $result['courses']);
+
+        $method = new ReflectionMethod(\tool_modeussync\task\push_courses::class, 'getCoursesToPush');
+        $method->setAccessible(true);
+        $rows = $method->invoke(new \tool_modeussync\task\push_courses(), 0, null);
+        $byid = array_column($rows, null, 'id');
+        $this->assertSame('adapter-second', $byid[$courseid]['lmsIdNumber']);
+    }
+
+    public function test_invalid_prototype_identity_does_not_replace_mapping_or_delete_duplicates(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+        $prototype = $this->valid_prototype();
+        $task->create_for_test([$prototype], (int) $category->id);
+        $courseid = (int) $DB->get_field('course', 'id', ['idnumber' => 'valid-modeus-id'], MUST_EXIST);
+        $duplicate = $this->getDataGenerator()->create_course(['summary' => $prototype['summary']]);
+        foreach ([null, '', '  ', false, [], str_repeat('p', 256)] as $id) {
+            $prototype['id'] = $id;
+            $result = $task->create_for_test([$prototype], (int) $category->id);
+            $this->assertTrue($result['failed']);
+            $this->assertSame('valid-course-id', (new course_map_repository())->get_by_courseid($courseid)->prototypeid);
+            $this->assertTrue($DB->record_exists('course', ['id' => $duplicate->id]));
+        }
+    }
+
+    public function test_authoritative_mapping_prevents_conflicting_summary_from_matching_another_rmup(): void {
+        global $DB;
+        $this->resetAfterTest();
+        $category = $this->getDataGenerator()->create_category();
+        $prototype = $this->valid_prototype();
+        $unrelated = $this->getDataGenerator()->create_course(['summary' => $prototype['summary']]);
+        $repository = new course_map_repository();
+        $repository->upsert((int) $unrelated->id, 'other-rmup', 'other-prototype');
+        $task = new testable_pull_courses_partial_failure();
+        $result = $task->create_for_test([$prototype], (int) $category->id);
+        $this->assertFalse($result['failed']);
+        $this->assertTrue($DB->record_exists('course', ['id' => $unrelated->id]));
+        $this->assertSame('other-rmup', $repository->get_by_courseid((int) $unrelated->id)->rmupid);
+        $this->assertCount(1, $repository->get_by_rmupids(['valid-modeus-id']));
+    }
 
     public function test_course_is_created_when_attendance_plugin_is_unavailable(): void {
         global $DB;
@@ -218,6 +281,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertSame(1, $DB->count_records('course', [
             'summary' => 'Курс создан по РМУП [valid-modeus-id]',
         ]));
+        $this->assertSame('valid-course-id', (new course_map_repository())->get_by_courseid((int) $course->id)->prototypeid);
     }
 
     public function test_oldest_existing_course_is_used_when_modeus_id_has_duplicates(): void {
@@ -244,6 +308,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $DB->set_field('course', 'timecreated', 50, ['id' => $oldest->id]);
         $DB->set_field('course', 'timecreated', 100, ['id' => $older->id]);
         $DB->set_field('course', 'timecreated', 200, ['id' => $newer->id]);
+        $repository = new course_map_repository();
+        $repository->upsert((int) $newer->id, 'valid-modeus-id', 'outdated-prototype');
         $task = new testable_pull_courses_partial_failure();
 
         $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
@@ -258,6 +324,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
             $DB->get_field('course', 'idnumber', ['id' => $oldest->id], MUST_EXIST)
         );
         $this->assertSame(1, $DB->count_records('course', ['summary' => $summary]));
+        $this->assertNull($repository->get_by_courseid((int) $newer->id));
+        $this->assertSame('valid-course-id', $repository->get_by_courseid((int) $oldest->id)->prototypeid);
     }
 
     public function test_course_copy_restore_target_is_not_deleted_as_duplicate(): void {
@@ -464,6 +532,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertCount(2, $result['courses']);
         $this->assertSame($result['courses'][0]['id_lms'], $result['courses'][1]['id_lms']);
         $this->assertSame(1, $DB->count_records('course', ['idnumber' => 'valid-modeus-id']));
+        $map = $DB->get_record('tool_modeussync_course_map', ['rmupid' => 'valid-modeus-id'], '*', MUST_EXIST);
+        $this->assertSame($second['id'], $map->prototypeid);
     }
 
     public function test_course_without_modeus_id_is_not_created(): void {
@@ -499,6 +569,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertFalse($DB->record_exists('course', ['idnumber' => 'invalid-modeus-id']));
         $validcourse = $DB->get_record('course', ['idnumber' => 'valid-modeus-id'], '*', MUST_EXIST);
         $this->assertSame('valid-modeus-id', $result['courses'][0]['id_lms']);
+        $this->assertFalse($DB->record_exists('tool_modeussync_course_map', ['rmupid' => 'invalid-modeus-id']));
+        $this->assertSame('valid-course-id', (new course_map_repository())->get_by_courseid((int) $validcourse->id)->prototypeid);
     }
 
     public function test_do_work_processes_successful_courses_but_returns_false_after_partial_failure(): void {
@@ -524,6 +596,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
     }
 
     public function test_do_work_returns_true_when_all_courses_succeed(): void {
+        global $DB;
         $this->resetAfterTest();
         $category = $this->getDataGenerator()->create_category();
         set_config('default_category', $category->id, 'tool_modeussync');
@@ -536,6 +609,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $this->assertTrue($task->do_work(['id' => 'session-1'], null));
         $this->assertCount(1, $syncservice->batches);
+        $this->assertTrue($DB->record_exists('tool_modeussync_course_map', ['prototypeid' => 'valid-course-id']));
+        $this->assertSame(0, $DB->count_records('tool_modeussync_course_queue'));
     }
 
     public function test_execute_closes_session_when_new_course_request_fails_after_course_creation(): void {
@@ -554,6 +629,8 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $task->execute();
 
+        $this->assertTrue($DB->record_exists('tool_modeussync_course_map', ['prototypeid' => 'valid-course-id']));
+        $this->assertSame(0, $DB->count_records('tool_modeussync_course_queue'));
         $this->assertTrue($DB->record_exists('course', ['idnumber' => 'valid-modeus-id']));
         $this->assertSame(['session-1'], $adapter->closedSessionIds);
     }

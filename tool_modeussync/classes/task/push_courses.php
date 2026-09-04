@@ -47,6 +47,7 @@ class push_courses extends base_sync_job
         mtrace("Ищем курсы для отправки...");
         $fromSql = "
         FROM {course} c
+        LEFT JOIN {tool_modeussync_course_map} cmap ON cmap.courseid = c.id
         LEFT JOIN (
             SELECT DISTINCT(l.courseid) as courseid
             FROM {logstore_standard_log} l
@@ -65,10 +66,15 @@ class push_courses extends base_sync_job
                 AND (lg.action = 'created' OR lg.action = 'updated' OR lg.action = 'deleted')
                 AND (:last_sync_date_is_null_6 OR :last_sync_date7 <= lg.timecreated)
         ) g ON g.courseid = c.id
-        WHERE c.timemodified >= :minimum_date
-        AND ((:last_sync_date_is_null_3 OR :last_sync_date4 <= c.timecreated OR :last_sync_date5 <= c.timemodified) 
-                OR l.courseid is not null 
-                OR g.courseid is not null)";
+        WHERE (
+            c.timemodified >= :minimum_date
+            AND ((:last_sync_date_is_null_3 OR :last_sync_date4 <= c.timecreated OR :last_sync_date5 <= c.timemodified)
+                OR l.courseid IS NOT NULL
+                OR g.courseid IS NOT NULL)
+        ) OR (
+            cmap.timemodified >= :mapping_minimum_date
+            AND (:mapping_last_sync_is_null OR :mapping_last_sync_date <= cmap.timemodified)
+        )";
 
         $countSql = "SELECT count(DISTINCT c.id) {$fromSql}";
         $queryParams = [
@@ -80,6 +86,9 @@ class push_courses extends base_sync_job
             'last_sync_date5' => $lastSyncTime,
             'last_sync_date_is_null_6' => $lastSyncTime == null,
             'last_sync_date7' => $lastSyncTime,
+            'mapping_minimum_date' => $minimumUpdatedAt,
+            'mapping_last_sync_is_null' => $lastSyncTime == null,
+            'mapping_last_sync_date' => $lastSyncTime,
         ];
 
         $coursesCount = $DB->count_records_sql($countSql, $queryParams);
@@ -87,14 +96,14 @@ class push_courses extends base_sync_job
         mtrace("Найдено {$coursesCount} релевантных курсов с изменениями >= $lastSyncTime ({$lastSyncTimeStr})");
 
         mtrace("Загружаем данные из БД...");
-        $selectSql = "SELECT c.* {$fromSql}";
+        $selectSql = "SELECT c.*, cmap.prototypeid AS adapterprototypeid {$fromSql}";
         $courses = $DB->get_records_sql($selectSql, $queryParams);
 
         $courseModels = [];
         foreach ($courses as $course) {
             $nextCourse = [];
             $nextCourse['id'] = $course->id;
-            $nextCourse['lmsIdNumber'] = $course->idnumber;
+            $nextCourse['lmsIdNumber'] = $course->adapterprototypeid ?? $course->idnumber;
             $nextCourse['name'] = $course->fullname;
             $nextCourse['modules'] = $this->getCourseModules($course);
 

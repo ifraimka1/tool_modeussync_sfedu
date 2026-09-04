@@ -7,6 +7,7 @@ use Throwable;
 use tool_modeussync\courses_consts;
 use tool_modeussync\local\course_reference;
 use tool_modeussync\repository\courses_repository;
+use tool_modeussync\repository\course_map_repository;
 use tool_modeussync\task\base\base_sync_job;
 use tool_modeussync\service\SyncService;
 use tool_modeussync\local\queue\queue_repository;
@@ -98,7 +99,7 @@ class pull_courses extends base_sync_job
 
     protected function create_courses(array $courses, int $categoryId): array
     {
-        global $CFG;
+        global $CFG, $DB;
         require_once $CFG->dirroot . "/course/lib.php";
         require_once $CFG->libdir . '/completionlib.php';
 
@@ -110,6 +111,8 @@ class pull_courses extends base_sync_job
             }
         }
 
+        $mapRepository = new course_map_repository();
+        $mapsByCourseId = $mapRepository->get_by_rmupids(array_keys($modeusIds));
         $existingCourses = array();
         if (!empty($modeusIds)) {
             $existingCourses = array_merge(
@@ -117,7 +120,19 @@ class pull_courses extends base_sync_job
                 array_values(courses_repository::get_courses_with_modeus_references())
             );
         }
-        $coursesByModeusId = $this->index_courses_by_modeus_id($existingCourses, array_keys($modeusIds));
+        if (!empty($mapsByCourseId)) {
+            $existingCourses = array_merge($existingCourses, array_values($DB->get_records_list(
+                'course', 'id', array_keys($mapsByCourseId), '', 'id, idnumber, summary, timecreated'
+            )));
+        }
+        // Load all candidate mappings so editable fields cannot override another RMUP's identity.
+        $candidateIds = array_unique(array_map(static function ($course): int {
+            return (int) $course->id;
+        }, $existingCourses));
+        $mapsByCourseId = $mapRepository->get_by_courseids($candidateIds);
+        $coursesByModeusId = $this->index_courses_by_modeus_id(
+            $existingCourses, array_keys($modeusIds), $mapsByCourseId
+        );
 
         $resultcourses = array();
         $failed = false;
@@ -127,8 +142,13 @@ class pull_courses extends base_sync_job
             mtrace("Создаю курс [$fullname]...");
 
             try {
+                $prototypeId = $coursePrototype['id'] ?? null;
+                if ((!is_string($prototypeId) && !is_int($prototypeId)) ||
+                        trim((string) $prototypeId) === '' || \core_text::strlen(trim((string) $prototypeId)) > 255) {
+                    throw new \UnexpectedValueException("Некорректный ID прототипа LMS Adapter для курса [{$fullname}]");
+                }
                 $idModeus = course_reference::extract_modeus_id($coursePrototype['summary'] ?? null);
-                if ($idModeus === null) {
+                if ($idModeus === null || $idModeus === '' || \core_text::strlen($idModeus) > 255) {
                     throw new \UnexpectedValueException(
                         "Не удалось извлечь ID РМУП из описания курса [{$fullname}]"
                     );
@@ -155,6 +175,7 @@ class pull_courses extends base_sync_job
 
                     mtrace("Курс с ID РМУП = [$idModeus] уже существует, id: ({$existingCourse->id})");
 
+                    $mapRepository->upsert((int) $existingCourse->id, $idModeus, (string) $prototypeId);
                     $this->ensure_attendance_module((int) $existingCourse->id);
 
                     mtrace("Извлечен idModeus [$idModeus] для курса [$fullname]");
@@ -211,6 +232,7 @@ class pull_courses extends base_sync_job
             $courseId = (int) create_course((object) $course)->id;
             $this->create_sections($coursePrototype['sections'], $courseId);
             $this->ensure_attendance_module($courseId);
+            (new course_map_repository())->upsert($courseId, $idModeus, (string) $coursePrototype['id']);
             $transaction->allow_commit();
             return $courseId;
         } catch (Throwable $e) {
@@ -222,7 +244,7 @@ class pull_courses extends base_sync_job
     /**
      * Индексирует существующие курсы по идентификатору РМУП и выбирает самый старый курс.
      */
-    private function index_courses_by_modeus_id(array $courses, array $requestedModeusIds): array
+    private function index_courses_by_modeus_id(array $courses, array $requestedModeusIds, array $mapsByCourseId): array
     {
         $requestedIds = array_fill_keys($requestedModeusIds, true);
         $groupedCourses = array();
@@ -239,8 +261,11 @@ class pull_courses extends base_sync_job
                 continue;
             }
 
+            $map = $mapsByCourseId[(int) $course->id] ?? null;
             $summaryModeusId = course_reference::extract_modeus_id($course->summary ?? null);
-            $courseModeusId = $summaryModeusId ?? trim((string) ($course->idnumber ?? ''));
+            $courseModeusId = $map !== null
+                ? $map->rmupid
+                : ($summaryModeusId ?? trim((string) ($course->idnumber ?? '')));
 
             if ($courseModeusId === '' || !isset($requestedIds[$courseModeusId])) {
                 continue;
@@ -248,7 +273,7 @@ class pull_courses extends base_sync_job
 
             $groupedCourses[$courseModeusId][(int) $course->id] = [
                 'course' => $course,
-                'summarymatch' => $summaryModeusId === $courseModeusId,
+                'confirmed' => $map !== null || $summaryModeusId === $courseModeusId,
             ];
         }
 
@@ -264,14 +289,14 @@ class pull_courses extends base_sync_job
                 return (int) $left['course']->id <=> (int) $right['course']->id;
             });
 
-            $summaryCandidates = array_values(array_filter(
+            $confirmedCandidates = array_values(array_filter(
                 $candidates,
                 static function (array $candidate): bool {
-                    return $candidate['summarymatch'];
+                    return $candidate['confirmed'];
                 }
             ));
-            $selectedCandidate = $summaryCandidates[0] ?? $candidates[0];
-            $duplicateCourses = array_slice($summaryCandidates, 1);
+            $selectedCandidate = $confirmedCandidates[0] ?? $candidates[0];
+            $duplicateCourses = array_slice($confirmedCandidates, 1);
 
             $coursesByModeusId[$idModeus] = [
                 'selected' => $selectedCandidate['course'],

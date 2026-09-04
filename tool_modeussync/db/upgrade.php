@@ -70,5 +70,22 @@ function xmldb_tool_modeussync_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026083100, 'tool', 'modeussync');
     }
 
+    if ($oldversion < 2026090400) {
+        $table = new xmldb_table('tool_modeussync_course_map');
+        $table->addField(new xmldb_field('id', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, XMLDB_SEQUENCE));
+        $table->addField(new xmldb_field('courseid', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL));
+        $table->addField(new xmldb_field('rmupid', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL));
+        $table->addField(new xmldb_field('prototypeid', XMLDB_TYPE_CHAR, '255', null, XMLDB_NOTNULL));
+        $table->addField(new xmldb_field('timecreated', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL));
+        $table->addField(new xmldb_field('timemodified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL));
+        $table->addKey(new xmldb_key('primary', XMLDB_KEY_PRIMARY, ['id']));
+        $table->addKey(new xmldb_key('course_fk', XMLDB_KEY_FOREIGN_UNIQUE, ['courseid'], 'course', ['id']));
+        $table->addIndex(new xmldb_index('rmupid_ix', XMLDB_INDEX_NOTUNIQUE, ['rmupid']));
+        if (!$dbman->table_exists($table)) {
+            $dbman->create_table($table);
+        }
+        upgrade_plugin_savepoint(true, 2026090400, 'tool', 'modeussync');
+    }
+
     return true;
 }

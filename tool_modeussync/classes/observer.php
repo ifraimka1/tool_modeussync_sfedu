@@ -4,6 +4,7 @@ namespace tool_modeussync;
 
 use tool_modeussync\local\course_reference;
 use tool_modeussync\local\queue\queue_repository;
+use tool_modeussync\repository\course_map_repository;
 
 defined('MOODLE_INTERNAL') || die();
 
@@ -11,6 +12,7 @@ defined('MOODLE_INTERNAL') || die();
 final class observer {
 
     public static function course_deleted(\core\event\course_deleted $event): void {
+        (new course_map_repository())->delete_by_courseid((int) $event->objectid);
         (new queue_repository())->delete_course_queue((int) $event->objectid);
     }
 
@@ -26,6 +28,7 @@ final class observer {
             return;
         }
 
+        (new course_map_repository())->delete_by_courseid((int) $event->objectid);
         $course = $DB->get_record('course', ['id' => $event->objectid], 'id, summary', MUST_EXIST);
         $summary = course_reference::remove_modeus_reference((string) $course->summary);
         if ($summary === $course->summary) {
