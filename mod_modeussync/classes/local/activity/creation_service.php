@@ -31,23 +31,29 @@ final class creation_service {
     /** @var SyncService */
     private $syncservice;
 
+    /** @var created_activity_manager */
+    private $createdactivities;
+
     public function __construct(
         ?queue_repository $queues = null,
         ?factory_registry $factories = null,
         ?section_manager $sections = null,
-        ?SyncService $syncservice = null
+        ?SyncService $syncservice = null,
+        ?created_activity_manager $createdactivities = null
     ) {
         $this->queues = $queues ?? new queue_repository();
         $this->factories = $factories ?? new factory_registry();
         $this->sections = $sections ?? new section_manager();
         $this->syncservice = $syncservice ?? new SyncService();
+        $this->createdactivities = $createdactivities ?? new created_activity_manager();
     }
 
     public function process(
         int $courseid,
         int $userid,
         array $selections,
-        array $nameoverrides = []
+        array $nameoverrides = [],
+        bool $recreationconfirmed = false
     ): \stdClass {
         global $DB;
 
@@ -72,6 +78,18 @@ final class creation_service {
             $context = \context_course::instance($courseid);
             $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
             $items = $this->reconcile_created_items($courseid, $queue->id, $userid, $items);
+            $changes = $this->created_item_changes($items, $selections, $nameoverrides);
+            $this->validate_recreations($courseid, $changes, $recreationconfirmed);
+            [$renamed, $recreated] = $this->apply_created_item_changes(
+                $courseid,
+                $queue->id,
+                $userid,
+                $changes
+            );
+            $items = $this->queues->get_items($queue->id);
+            if ($renamed && !$recreated && $this->all_created($items)) {
+                return $this->result($queue->id, $queue->status, count($items), 0, false);
+            }
             if ($queue->status === course_status::SYNCED && $this->all_created($items)) {
                 return $this->result($queue->id, course_status::SYNCED, count($items), 0, false);
             }
@@ -281,6 +299,106 @@ final class creation_service {
                 throw new \invalid_parameter_exception('Queue item name overrides cannot exceed 255 characters.');
             }
         }
+    }
+
+    /** @return array<int, array{item:\stdClass, module:string, override:?string, typechanged:bool, namechanged:bool}> */
+    private function created_item_changes(array $items, array $selections, array $nameoverrides): array {
+        $changes = [];
+        foreach ($items as $item) {
+            if ($item->status !== item_status::CREATED) {
+                continue;
+            }
+            $itemid = (int) $item->id;
+            $module = array_key_exists($itemid, $selections) ? $selections[$itemid] : $item->targetmodule;
+            $storedvalue = trim((string) ($item->nameoverride ?? ''));
+            $storedoverride = $storedvalue === '' ? null : $storedvalue;
+            $override = $storedoverride;
+            if (array_key_exists($itemid, $nameoverrides)) {
+                $normalized = trim($nameoverrides[$itemid]);
+                $override = $normalized === '' ? null : $normalized;
+            }
+            $typechanged = $module !== $item->targetmodule;
+            $namechanged = $override !== $storedoverride;
+            if (!$typechanged && !$namechanged) {
+                continue;
+            }
+            $changes[$itemid] = [
+                'item' => $item,
+                'module' => $module,
+                'override' => $override,
+                'typechanged' => $typechanged,
+                'namechanged' => $namechanged,
+            ];
+        }
+
+        return $changes;
+    }
+
+    private function validate_recreations(int $courseid, array $changes, bool $confirmed): void {
+        foreach ($changes as $change) {
+            if (!$change['typechanged']) {
+                continue;
+            }
+            if (!$confirmed) {
+                throw new \moodle_exception('recreationconfirmationrequired', 'mod_modeussync');
+            }
+            $item = $change['item'];
+            if ($this->createdactivities->has_grades(
+                $courseid,
+                (int) $item->coursemoduleid,
+                $item->targetmodule
+            )) {
+                throw new \moodle_exception('gradedactivitycannotberecreated', 'mod_modeussync', '', $item->name);
+            }
+        }
+    }
+
+    /** @return array{0:bool, 1:bool} Whether an item was renamed and whether one was recreated. */
+    private function apply_created_item_changes(
+        int $courseid,
+        int $queueid,
+        int $userid,
+        array $changes
+    ): array {
+        $renamed = false;
+        $recreated = false;
+        foreach ($changes as $change) {
+            $item = $change['item'];
+            if ($change['typechanged']) {
+                $oldcmid = (int) $item->coursemoduleid;
+                $this->queues->set_course_status($queueid, course_status::PENDING);
+                $this->queues->reopen_created_item((int) $item->id);
+                try {
+                    $this->createdactivities->delete($oldcmid);
+                } catch (\Throwable $exception) {
+                    $this->queues->mark_item_created(
+                        (int) $item->id,
+                        $oldcmid,
+                        !empty($item->createdby) ? (int) $item->createdby : $userid,
+                        $item->targetmodule
+                    );
+                    throw $exception;
+                }
+                $this->queues->save_target_modules($queueid, [(int) $item->id => $change['module']]);
+                if ($change['namechanged']) {
+                    $this->queues->save_name_overrides($queueid, [(int) $item->id => $change['override'] ?? '']);
+                }
+                $recreated = true;
+                continue;
+            }
+
+            $name = $change['override'] ?? $item->name;
+            $this->createdactivities->rename(
+                $courseid,
+                (int) $item->coursemoduleid,
+                $item->targetmodule,
+                $name
+            );
+            $this->queues->save_created_name_override((int) $item->id, $change['override']);
+            $renamed = true;
+        }
+
+        return [$renamed, $recreated];
     }
 
     private function find_existing_activity(int $courseid, string $externalid): ?\stdClass {

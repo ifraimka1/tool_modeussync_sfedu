@@ -524,12 +524,216 @@ final class creation_service_test extends advanced_testcase {
         $secondsync = new fake_modeus_sync_service();
         $sink = $this->redirectEvents();
 
-        $result = (new creation_service(null, null, null, $secondsync))->process($course->id, 2, []);
+        $storedbefore = (new queue_repository())->get_item($items[0]->id);
+        $result = (new creation_service(null, null, null, $secondsync))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN],
+            [$items[0]->id => '']
+        );
 
         $this->assertSame(course_status::SYNCED, $result->status);
         $this->assertFalse($result->syncattempted);
         $this->assertSame([], $secondsync->payloads);
+        $this->assertSame(
+            (int) $storedbefore->coursemoduleid,
+            (int) (new queue_repository())->get_item($items[0]->id)->coursemoduleid
+        );
         $this->assertSame(0, $this->count_plugin_events($sink->get_events()));
+    }
+
+    public function test_created_activity_name_change_renames_without_recreation_or_sync(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'rename-created',
+            'name' => 'Исходное название',
+            'grade' => 25,
+        ]]);
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN]
+        );
+        $repository = new queue_repository();
+        $before = $repository->get_item($items[0]->id);
+        $cm = get_coursemodule_from_id('assign', $before->coursemoduleid, $course->id, false, MUST_EXIST);
+        $DB->set_field('assign', 'intro', 'Настройки должны сохраниться', ['id' => $cm->instance]);
+        $sync = new fake_modeus_sync_service();
+
+        $result = (new creation_service(null, null, null, $sync))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN],
+            [$items[0]->id => 'Новое название']
+        );
+
+        $after = $repository->get_item($items[0]->id);
+        $this->assertSame((int) $before->coursemoduleid, (int) $after->coursemoduleid);
+        $this->assertSame('Новое название', $after->nameoverride);
+        $this->assertSame('Новое название', $DB->get_field('assign', 'name', ['id' => $cm->instance]));
+        $this->assertSame('Настройки должны сохраниться', $DB->get_field('assign', 'intro', ['id' => $cm->instance]));
+        $this->assertSame([], $sync->payloads);
+        $this->assertFalse($result->syncattempted);
+    }
+
+    public function test_created_activity_type_change_recreates_and_syncs(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'recreate-created',
+            'name' => 'Сменить тип',
+            'grade' => 25,
+        ]]);
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN]
+        );
+        $repository = new queue_repository();
+        $oldcmid = (int) $repository->get_item($items[0]->id)->coursemoduleid;
+        $sync = new fake_modeus_sync_service();
+
+        $result = (new creation_service(null, null, null, $sync))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::QUIZ],
+            [$items[0]->id => 'Тест после пересоздания'],
+            true
+        );
+
+        $stored = $repository->get_item($items[0]->id);
+        $this->assertSame(target_module::QUIZ, $stored->targetmodule);
+        $this->assertNotSame($oldcmid, (int) $stored->coursemoduleid);
+        $this->assertFalse($DB->record_exists('course_modules', ['id' => $oldcmid]));
+        $newcm = get_coursemodule_from_id('quiz', $stored->coursemoduleid, $course->id, false, MUST_EXIST);
+        $this->assertSame('Тест после пересоздания', $DB->get_field('quiz', 'name', ['id' => $newcm->instance]));
+        $this->assertSame(1, $DB->count_records('course_modules', [
+            'course' => $course->id,
+            'idnumber' => 'recreate-created',
+        ]));
+        $this->assertTrue($result->syncattempted);
+        $this->assertCount(1, $sync->payloads);
+    }
+
+    public function test_created_activity_type_change_requires_confirmation_without_mutation(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'unconfirmed-recreation',
+            'name' => 'Не удалять без подтверждения',
+            'grade' => 25,
+        ]]);
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN]
+        );
+        $repository = new queue_repository();
+        $before = $repository->get_item($items[0]->id);
+
+        try {
+            (new creation_service())->process(
+                $course->id,
+                2,
+                [$items[0]->id => target_module::QUIZ]
+            );
+            $this->fail('Expected confirmation exception was not thrown.');
+        } catch (moodle_exception $exception) {
+            $this->assertSame('recreationconfirmationrequired', $exception->errorcode);
+        }
+
+        $after = $repository->get_item($items[0]->id);
+        $this->assertSame((int) $before->coursemoduleid, (int) $after->coursemoduleid);
+        $this->assertSame(target_module::ASSIGN, $after->targetmodule);
+        $this->assertTrue($DB->record_exists('course_modules', ['id' => $before->coursemoduleid]));
+    }
+
+    public function test_any_graded_activity_blocks_all_requested_recreations_before_mutation(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->libdir . '/grade/grade_item.php');
+        require_once($CFG->libdir . '/grade/grade_grade.php');
+        $this->resetAfterTest();
+        $course = $this->course();
+        $student = $this->getDataGenerator()->create_user();
+        [, $items] = $this->queue($course->id, [
+            [
+                'id' => 'ungraded-recreation',
+                'name' => 'Первое задание без оценки',
+                'grade' => 25,
+            ],
+            [
+                'id' => 'graded-recreation',
+                'name' => 'Второе задание с оценкой',
+                'grade' => 25,
+            ],
+        ]);
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))->process(
+            $course->id,
+            2,
+            [
+                $items[0]->id => target_module::ASSIGN,
+                $items[1]->id => target_module::ASSIGN,
+            ]
+        );
+        $repository = new queue_repository();
+        $firstbefore = $repository->get_item($items[0]->id);
+        $gradedbefore = $repository->get_item($items[1]->id);
+        $cm = get_coursemodule_from_id(
+            'assign',
+            $gradedbefore->coursemoduleid,
+            $course->id,
+            false,
+            MUST_EXIST
+        );
+        $gradeitem = \grade_item::fetch([
+            'courseid' => $course->id,
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $cm->instance,
+        ]);
+        $now = time();
+        $grade = new \grade_grade((object) [
+            'itemid' => $gradeitem->id,
+            'userid' => $student->id,
+            'rawgrade' => 0,
+            'finalgrade' => 0,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ], false);
+        $grade->insert();
+
+        try {
+            (new creation_service())->process(
+                $course->id,
+                2,
+                [
+                    $items[0]->id => target_module::QUIZ,
+                    $items[1]->id => target_module::QUIZ,
+                ],
+                [],
+                true
+            );
+            $this->fail('Expected graded activity exception was not thrown.');
+        } catch (moodle_exception $exception) {
+            $this->assertSame('gradedactivitycannotberecreated', $exception->errorcode);
+        }
+
+        $firstafter = $repository->get_item($items[0]->id);
+        $gradedafter = $repository->get_item($items[1]->id);
+        $this->assertSame((int) $firstbefore->coursemoduleid, (int) $firstafter->coursemoduleid);
+        $this->assertSame((int) $gradedbefore->coursemoduleid, (int) $gradedafter->coursemoduleid);
+        $this->assertSame(target_module::ASSIGN, $firstafter->targetmodule);
+        $this->assertSame(target_module::ASSIGN, $gradedafter->targetmodule);
+        $this->assertTrue($DB->record_exists('course_modules', ['id' => $firstbefore->coursemoduleid]));
+        $this->assertTrue($DB->record_exists('course_modules', ['id' => $gradedbefore->coursemoduleid]));
     }
 
     public function test_repeat_sync_resends_existing_partial_queue_without_creating_or_changing_pending_state(): void {

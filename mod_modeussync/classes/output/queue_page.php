@@ -2,6 +2,7 @@
 
 namespace mod_modeussync\output;
 
+use mod_modeussync\local\activity\created_activity_manager;
 use mod_modeussync\local\queue\item_sorter;
 use tool_modeussync\local\queue\course_status;
 use tool_modeussync\local\queue\item_status;
@@ -38,6 +39,7 @@ final class queue_page implements \renderable, \templatable {
         $hasfaileditems = false;
         $hasmissingcreateditems = false;
         $hasexistingcreateditems = false;
+        $createdactivities = new created_activity_manager();
 
         foreach (item_sorter::sort($this->items) as $item) {
             $hasfaileditems = $hasfaileditems || $item->status === item_status::FAILED;
@@ -68,6 +70,12 @@ final class queue_page implements \renderable, \templatable {
                     'id' => $item->coursemoduleid,
                 ]))->out(false);
             }
+            $created = $item->status === item_status::CREATED && $activityexists;
+            $hasgrades = $created && $createdactivities->has_grades(
+                (int) $this->queue->courseid,
+                (int) $item->coursemoduleid,
+                $item->targetmodule
+            );
 
             $rows[] = [
                 'id' => (int) $item->id,
@@ -79,7 +87,13 @@ final class queue_page implements \renderable, \templatable {
                 'selectedassign' => $item->targetmodule === target_module::ASSIGN,
                 'selectedquiz' => $item->targetmodule === target_module::QUIZ,
                 'selectedworkshop' => $item->targetmodule === target_module::WORKSHOP,
-                'disabled' => ($item->status === item_status::CREATED && $activityexists) || !$this->canmanage,
+                'disabled' => !$this->canmanage,
+                'created' => $created,
+                'createdvalue' => $created ? '1' : '0',
+                'hasgrades' => $hasgrades,
+                'hasgradesvalue' => $hasgrades ? '1' : '0',
+                'originalmodule' => $item->targetmodule,
+                'originalnameoverride' => $item->nameoverride ?? '',
                 'activityurl' => $activityurl,
                 'error' => !empty($item->lasterror) ? (string) $item->lasterror : null,
             ];
@@ -101,6 +115,8 @@ final class queue_page implements \renderable, \templatable {
             'buttonlabel' => get_string($buttonkey, 'mod_modeussync'),
             'buttondisabled' => $this->queue->status === course_status::SYNCED &&
                 !$hasmissingcreateditems,
+            'buttondisabledvalue' => $this->queue->status === course_status::SYNCED &&
+                !$hasmissingcreateditems ? '1' : '0',
             'repeatlinklabel' => get_string('repeatlink', 'mod_modeussync'),
             'repeatlinkdisabled' => !$hasexistingcreateditems,
             'queuestatus' => get_string('course_status_' . $this->queue->status, 'mod_modeussync'),

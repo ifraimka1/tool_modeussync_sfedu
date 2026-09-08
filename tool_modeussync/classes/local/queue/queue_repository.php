@@ -437,6 +437,36 @@ final class queue_repository {
     }
 
     /**
+     * Persists the name override of an existing generated activity after it has been renamed.
+     *
+     * @param int $itemid Queue item id.
+     * @param string|null $override Normalized override, or null to use the Modeus name.
+     * @return void
+     */
+    public function save_created_name_override(int $itemid, ?string $override): void {
+        global $DB;
+
+        $override = $override === null ? null : trim($override);
+        $override = $override === '' ? null : $override;
+        if ($override !== null && \core_text::strlen($override) > 255) {
+            throw new \invalid_parameter_exception('Queue item name overrides cannot exceed 255 characters.');
+        }
+        $item = $this->get_item($itemid);
+        if ($item->status !== item_status::CREATED) {
+            throw new \invalid_parameter_exception('Only a created queue item can be renamed in place.');
+        }
+        if ($item->nameoverride === $override) {
+            return;
+        }
+
+        $DB->update_record(self::ITEMS_TABLE, (object) [
+            'id' => $itemid,
+            'nameoverride' => $override,
+            'timemodified' => time(),
+        ]);
+    }
+
+    /**
      * Gets course ids that currently have queue items.
      *
      * @param int $limit Maximum number of course ids.

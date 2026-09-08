@@ -121,7 +121,11 @@ final class view_access_test extends advanced_testcase {
         $this->assertTrue($pending['selectedassign']);
         $this->assertFalse($pending['disabled']);
         $this->assertStringNotContainsString('<script>', $pending['name']);
-        $this->assertTrue($createdrow['disabled']);
+        $this->assertFalse($createdrow['disabled']);
+        $this->assertTrue($createdrow['created']);
+        $this->assertSame(target_module::ASSIGN, $createdrow['originalmodule']);
+        $this->assertSame('', $createdrow['originalnameoverride']);
+        $this->assertFalse($createdrow['hasgrades']);
         $this->assertStringContainsString('/mod/assign/view.php', $createdrow['activityurl']);
         $this->assertStringContainsString('id=' . $cmid, $createdrow['activityurl']);
         $this->assertSame(get_string('retrysync', 'mod_modeussync'), $export->buttonlabel);
@@ -227,7 +231,7 @@ final class view_access_test extends advanced_testcase {
         $this->assertFalse($export->items[0]['selectedquiz']);
     }
 
-    public function test_output_exposes_stored_name_override_and_read_only_state(): void {
+    public function test_output_exposes_stored_name_override_and_editable_created_state(): void {
         global $PAGE;
 
         $this->resetAfterTest();
@@ -267,7 +271,60 @@ final class view_access_test extends advanced_testcase {
         $this->assertSame('Teacher <b>name</b>', $rows[$pending->id]['nameoverride']);
         $this->assertSame(255, $rows[$pending->id]['nameoverridemaxlength']);
         $this->assertFalse($rows[$pending->id]['disabled']);
-        $this->assertTrue($rows[$created->id]['disabled']);
+        $this->assertFalse($rows[$created->id]['disabled']);
+        $this->assertTrue($rows[$created->id]['created']);
+        $this->assertSame('', $rows[$created->id]['originalnameoverride']);
+    }
+
+    public function test_output_marks_created_activity_with_a_zero_grade_as_graded(): void {
+        global $CFG, $PAGE;
+
+        require_once($CFG->libdir . '/grade/grade_item.php');
+        require_once($CFG->libdir . '/grade/grade_grade.php');
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course();
+        $student = $this->getDataGenerator()->create_user();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        [$item] = $repository->upsert_item($queue->id, [
+            'id' => 'graded-created',
+            'name' => 'Оценённое задание',
+            'grade' => 25,
+        ]);
+        $cmid = (new assign_factory())->create(
+            $course,
+            (new section_manager())->get_or_create($course->id),
+            $item
+        );
+        $repository->mark_item_created($item->id, $cmid, 2, target_module::ASSIGN);
+        $cm = get_coursemodule_from_id('assign', $cmid, $course->id, false, MUST_EXIST);
+        $gradeitem = \grade_item::fetch([
+            'courseid' => $course->id,
+            'itemtype' => 'mod',
+            'itemmodule' => 'assign',
+            'iteminstance' => $cm->instance,
+        ]);
+        $now = time();
+        $grade = new \grade_grade((object) [
+            'itemid' => $gradeitem->id,
+            'userid' => $student->id,
+            'rawgrade' => 0,
+            'finalgrade' => 0,
+            'timecreated' => $now,
+            'timemodified' => $now,
+        ], false);
+        $grade->insert();
+        $PAGE->set_context(context_course::instance($course->id));
+
+        $export = (new queue_page(
+            $queue,
+            [$repository->get_item($item->id)],
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ))->export_for_template($PAGE->get_renderer('core'));
+
+        $this->assertTrue($export->items[0]['hasgrades']);
+        $this->assertSame('1', $export->items[0]['hasgradesvalue']);
     }
 
     public function test_output_sorts_items_by_name_and_moves_exam_and_bonus_items_to_end(): void {

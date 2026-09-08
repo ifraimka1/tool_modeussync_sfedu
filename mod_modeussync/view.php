@@ -28,11 +28,13 @@ if (data_submitted() && in_array(optional_param('action', '', PARAM_ALPHA), ['cr
     if ($action === 'create') {
         $selections = optional_param_array('targetmodule', [], PARAM_ALPHANUMEXT);
         $nameoverrides = optional_param_array('nameoverride', [], PARAM_TEXT);
+        $recreationconfirmed = optional_param('confirmrecreate', 0, PARAM_BOOL) === 1;
         $result = $service->process(
             (int) $course->id,
             (int) $USER->id,
             $selections,
-            $nameoverrides
+            $nameoverrides,
+            $recreationconfirmed
         );
         redirect($PAGE->url, get_string('processresult_' . $result->status, 'mod_modeussync'));
     }
@@ -49,6 +51,9 @@ if ($queue === null) {
 }
 $items = $repository->get_items($queue->id);
 $canmanage = access::can_manage($context, (int) $course->id);
+if ($canmanage) {
+    $PAGE->requires->js_call_amd('mod_modeussync/queue_editor', 'init');
+}
 $page = new queue_page($queue, $items, $PAGE->url, $canmanage);
 /** @var mod_modeussync_renderer $renderer */
 $renderer = $PAGE->get_renderer('mod_modeussync');
