@@ -2,7 +2,6 @@
     <div class="mb-3 text-muted">{{queuestatus}}</div>
     <form method="post" action="{{actionurl}}">
         <input type="hidden" name="sesskey" value="{{sesskey}}">
-        <input type="hidden" name="action" value="create">
         <div class="mod-modeussync-queue">
             <div class="row font-weight-bold mb-2">
                 <div class="col-md-5">{{#str}}modeusname, mod_modeussync{{/str}}</div>
@@ -46,8 +45,13 @@
             {{/items}}
         </div>
         {{#canmanage}}
-            <button type="submit" class="btn btn-primary" {{#buttondisabled}}disabled{{/buttondisabled}}>
+            <button type="submit" name="action" value="create" class="btn btn-primary"
+                    {{#buttondisabled}}disabled{{/buttondisabled}}>
                 {{buttonlabel}}
+            </button>
+            <button type="submit" name="action" value="resync" class="btn btn-secondary ml-2"
+                    {{#repeatlinkdisabled}}disabled{{/repeatlinkdisabled}}>
+                {{repeatlinklabel}}
             </button>
         {{/canmanage}}
     </form>

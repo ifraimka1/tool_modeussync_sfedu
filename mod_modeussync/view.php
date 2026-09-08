@@ -21,17 +21,25 @@ $PAGE->set_context($context);
 $PAGE->set_title(format_string($instance->name));
 $PAGE->set_heading(format_string($course->fullname));
 
-if (data_submitted() && optional_param('action', '', PARAM_ALPHA) === 'create') {
+if (data_submitted() && in_array(optional_param('action', '', PARAM_ALPHA), ['create', 'resync'], true)) {
     access::require_create_request($context, (int) $course->id);
-    $selections = optional_param_array('targetmodule', [], PARAM_ALPHANUMEXT);
-    $nameoverrides = optional_param_array('nameoverride', [], PARAM_TEXT);
-    $result = (new creation_service())->process(
-        (int) $course->id,
-        (int) $USER->id,
-        $selections,
-        $nameoverrides
-    );
-    redirect($PAGE->url, get_string('processresult_' . $result->status, 'mod_modeussync'));
+    $action = optional_param('action', '', PARAM_ALPHA);
+    $service = new creation_service();
+    if ($action === 'create') {
+        $selections = optional_param_array('targetmodule', [], PARAM_ALPHANUMEXT);
+        $nameoverrides = optional_param_array('nameoverride', [], PARAM_TEXT);
+        $result = $service->process(
+            (int) $course->id,
+            (int) $USER->id,
+            $selections,
+            $nameoverrides
+        );
+        redirect($PAGE->url, get_string('processresult_' . $result->status, 'mod_modeussync'));
+    }
+
+    $result = $service->repeat_sync((int) $course->id);
+    $messagekey = $result->syncsucceeded ? 'repeatlinksucceeded' : 'repeatlinkfailed';
+    redirect($PAGE->url, get_string($messagekey, 'mod_modeussync'));
 }
 
 $repository = new queue_repository();

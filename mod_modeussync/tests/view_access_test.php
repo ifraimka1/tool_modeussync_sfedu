@@ -126,6 +126,18 @@ final class view_access_test extends advanced_testcase {
         $this->assertStringContainsString('id=' . $cmid, $createdrow['activityurl']);
         $this->assertSame(get_string('retrysync', 'mod_modeussync'), $export->buttonlabel);
         $this->assertFalse($export->buttondisabled);
+        $this->assertSame(get_string('repeatlink', 'mod_modeussync'), $export->repeatlinklabel);
+        $this->assertFalse($export->repeatlinkdisabled);
+
+        $html = $PAGE->get_renderer('mod_modeussync')->render_queue_page(new queue_page(
+            $queue,
+            $items,
+            new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
+            true
+        ));
+        $this->assertStringContainsString('name="action" value="create"', $html);
+        $this->assertStringContainsString('name="action" value="resync"', $html);
+        $this->assertStringContainsString('btn btn-secondary', $html);
     }
 
     public function test_output_uses_retry_creation_and_disables_synced_queue(): void {
@@ -153,6 +165,7 @@ final class view_access_test extends advanced_testcase {
         ))->export_for_template($PAGE->get_renderer('core'));
         $this->assertSame(get_string('retrycreation', 'mod_modeussync'), $failedexport->buttonlabel);
         $this->assertFalse($failedexport->buttondisabled);
+        $this->assertTrue($failedexport->repeatlinkdisabled);
 
         $cmid = (new assign_factory())->create(
             $course,
@@ -170,6 +183,7 @@ final class view_access_test extends advanced_testcase {
             true
         ))->export_for_template($PAGE->get_renderer('core'));
         $this->assertTrue($syncedexport->buttondisabled);
+        $this->assertFalse($syncedexport->repeatlinkdisabled);
 
         $missingitem = clone $createditem;
         $missingitem->coursemoduleid = PHP_INT_MAX;
@@ -183,6 +197,7 @@ final class view_access_test extends advanced_testcase {
         $this->assertNull($missingexport->items[0]['activityurl']);
         $this->assertFalse($missingexport->buttondisabled);
         $this->assertSame(get_string('retrycreation', 'mod_modeussync'), $missingexport->buttonlabel);
+        $this->assertTrue($missingexport->repeatlinkdisabled);
     }
 
     public function test_output_exposes_workshop_selection(): void {
@@ -230,7 +245,12 @@ final class view_access_test extends advanced_testcase {
             'name' => 'Created assignment',
             'grade' => 25,
         ]);
-        $repository->mark_item_created($created->id, 123, 2, target_module::ASSIGN);
+        $cmid = (new assign_factory())->create(
+            $course,
+            (new section_manager())->get_or_create($course->id),
+            $created
+        );
+        $repository->mark_item_created($created->id, $cmid, 2, target_module::ASSIGN);
         $PAGE->set_context(context_course::instance($course->id));
 
         $export = (new queue_page(

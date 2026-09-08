@@ -195,6 +195,60 @@ final class creation_service {
         }
     }
 
+    /**
+     * Repeats only the existing course link notification sent to SyncService.
+     *
+     * Creation settings and queue items are deliberately left untouched. A partial queue keeps its
+     * creation status, while a fully created queue continues to use the normal synchronization states.
+     *
+     * @param int $courseid Moodle course id.
+     * @return \stdClass Processing result.
+     */
+    public function repeat_sync(int $courseid): \stdClass {
+        global $DB;
+
+        $factory = \core\lock\lock_config::get_lock_factory('tool_modeussync');
+        $lock = $factory->get_lock('queue:' . $courseid, 30);
+        if (!$lock) {
+            throw new \moodle_exception('cannotacquirecreationlock', 'mod_modeussync');
+        }
+
+        try {
+            $queue = $this->queues->get_course_queue($courseid);
+            if ($queue === null) {
+                throw new \invalid_parameter_exception('The course has no Modeus assignment queue.');
+            }
+
+            $items = $this->queues->get_items($queue->id);
+            $createdcount = 0;
+            foreach ($items as $item) {
+                if ($this->created_activity_exists($courseid, $item)) {
+                    $createdcount++;
+                }
+            }
+            if ($createdcount === 0) {
+                throw new \moodle_exception('nothingtorepeatlink', 'mod_modeussync');
+            }
+
+            $course = $DB->get_record('course', ['id' => $courseid], '*', MUST_EXIST);
+            $context = \context_course::instance($courseid);
+            $updatecoursestatus = $createdcount === count($items);
+            if ($updatecoursestatus) {
+                $this->queues->set_course_status($queue->id, course_status::AWAITING_SYNC);
+            }
+
+            return $this->perform_sync(
+                $queue,
+                $course,
+                $context,
+                $createdcount,
+                $updatecoursestatus
+            );
+        } finally {
+            $lock->release();
+        }
+    }
+
     private function validate_selections(int $queueid, array $selections, array $nameoverrides = []): void {
         $items = [];
         foreach ($this->queues->get_items($queueid) as $item) {
@@ -244,6 +298,28 @@ final class creation_service {
         ]);
 
         return $record === false ? null : $record;
+    }
+
+    private function created_activity_exists(int $courseid, \stdClass $item): bool {
+        if ($item->status !== item_status::CREATED || empty($item->coursemoduleid) ||
+                !target_module::is_supported($item->targetmodule)) {
+            return false;
+        }
+
+        global $DB;
+        $sql = "SELECT cm.id
+                  FROM {course_modules} cm
+                  JOIN {modules} m ON m.id = cm.module
+                 WHERE cm.id = :cmid
+                   AND cm.course = :courseid
+                   AND cm.deletioninprogress = 0
+                   AND m.name = :modulename";
+
+        return $DB->record_exists_sql($sql, [
+            'cmid' => $item->coursemoduleid,
+            'courseid' => $courseid,
+            'modulename' => $item->targetmodule,
+        ]);
     }
 
     /**
@@ -318,7 +394,8 @@ final class creation_service {
         \stdClass $queue,
         \stdClass $course,
         \context_course $context,
-        int $createdcount
+        int $createdcount,
+        bool $updatecoursestatus = true
     ): \stdClass {
         $idnumber = trim((string) $course->idnumber);
 
@@ -331,11 +408,13 @@ final class creation_service {
                 'id_lms' => $idnumber,
             ]]);
         } catch (\Throwable $exception) {
-            $this->queues->set_course_status(
-                $queue->id,
-                course_status::SYNC_FAILED,
-                get_string('syncfailed', 'mod_modeussync')
-            );
+            if ($updatecoursestatus) {
+                $this->queues->set_course_status(
+                    $queue->id,
+                    course_status::SYNC_FAILED,
+                    get_string('syncfailed', 'mod_modeussync')
+                );
+            }
             $this->trigger_event(sync_failed::class, [
                 'objectid' => $queue->id,
                 'context' => $context,
@@ -346,17 +425,33 @@ final class creation_service {
                 get_class($exception)
             );
 
-            return $this->result($queue->id, course_status::SYNC_FAILED, $createdcount, 0, true);
+            return $this->result(
+                $queue->id,
+                $updatecoursestatus ? course_status::SYNC_FAILED : $queue->status,
+                $createdcount,
+                0,
+                true,
+                false
+            );
         }
 
-        $this->queues->mark_course_synced($queue->id, time());
+        if ($updatecoursestatus) {
+            $this->queues->mark_course_synced($queue->id, time());
+        }
         $this->trigger_event(sync_succeeded::class, [
             'objectid' => $queue->id,
             'context' => $context,
             'other' => ['createdcount' => $createdcount],
         ]);
 
-        return $this->result($queue->id, course_status::SYNCED, $createdcount, 0, true);
+        return $this->result(
+            $queue->id,
+            $updatecoursestatus ? course_status::SYNCED : $queue->status,
+            $createdcount,
+            0,
+            true,
+            true
+        );
     }
 
     private function trigger_event(string $eventclass, array $data): void {
@@ -401,7 +496,8 @@ final class creation_service {
         string $status,
         int $createdcount,
         int $failedcount,
-        bool $syncattempted
+        bool $syncattempted,
+        ?bool $syncsucceeded = null
     ): \stdClass {
         return (object) [
             'queueid' => $queueid,
@@ -409,6 +505,7 @@ final class creation_service {
             'createdcount' => $createdcount,
             'failedcount' => $failedcount,
             'syncattempted' => $syncattempted,
+            'syncsucceeded' => $syncsucceeded,
         ];
     }
 }

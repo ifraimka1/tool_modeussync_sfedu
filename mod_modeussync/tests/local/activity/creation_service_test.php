@@ -32,7 +32,13 @@ final class fake_modeus_sync_service extends \tool_modeussync\service\SyncServic
     /** @var string */
     public $exceptionmessage = 'Deliberate SyncService failure';
 
+    /** @var callable|null */
+    public $beforesend = null;
+
     public function send_sync_courses(array $courses): array {
+        if ($this->beforesend !== null) {
+            call_user_func($this->beforesend);
+        }
         $this->payloads[] = $courses;
         if ($this->fail) {
             throw new RuntimeException($this->exceptionmessage);
@@ -524,6 +530,130 @@ final class creation_service_test extends advanced_testcase {
         $this->assertFalse($result->syncattempted);
         $this->assertSame([], $secondsync->payloads);
         $this->assertSame(0, $this->count_plugin_events($sink->get_events()));
+    }
+
+    public function test_repeat_sync_resends_existing_partial_queue_without_creating_or_changing_pending_state(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $course = $this->course();
+        [$queue, $items] = $this->queue($course->id, [
+            ['id' => 'created-before-repeat', 'name' => 'Созданное задание', 'grade' => 25],
+            ['id' => 'pending-during-repeat', 'name' => 'Ожидающее задание', 'grade' => 50],
+        ]);
+        $repository = new queue_repository();
+        $cmid = (new assign_factory())->create(
+            $course,
+            (new section_manager())->get_or_create($course->id),
+            $items[0]
+        );
+        $repository->mark_item_created($items[0]->id, $cmid, 2, target_module::ASSIGN);
+        $nevercreate = new failing_modeus_activity_factory();
+        $sync = new fake_modeus_sync_service();
+        $sink = $this->redirectEvents();
+
+        $result = (new creation_service(
+            null,
+            new factory_registry($nevercreate, $nevercreate, $nevercreate),
+            null,
+            $sync
+        ))->repeat_sync($course->id);
+
+        $this->assertTrue($result->syncsucceeded);
+        $this->assertSame(course_status::PENDING, $result->status);
+        $this->assertSame(1, $result->createdcount);
+        $this->assertSame(0, $nevercreate->calls);
+        $this->assertSame([[['id_modeus' => 'modeus-course-1', 'id_lms' => 'course-code']]], $sync->payloads);
+        $this->assertSame(course_status::PENDING, $repository->get_course_queue($course->id)->status);
+        $this->assertSame(item_status::CREATED, $repository->get_item($items[0]->id)->status);
+        $this->assertSame(item_status::PENDING, $repository->get_item($items[1]->id)->status);
+        $this->assertSame(1, $DB->count_records('course_modules', [
+            'course' => $course->id,
+            'idnumber' => 'created-before-repeat',
+        ]));
+        $failedsync = new fake_modeus_sync_service();
+        $failedsync->fail = true;
+        $failedresult = (new creation_service(null, null, null, $failedsync))->repeat_sync($course->id);
+
+        $this->assertFalse($failedresult->syncsucceeded);
+        $this->assertSame(course_status::PENDING, $failedresult->status);
+        $this->assertCount(1, $failedsync->payloads);
+        $this->assertSame(course_status::PENDING, $repository->get_course_queue($course->id)->status);
+        $this->assert_event_metadata($sink->get_events(), sync_succeeded::class, 'succeeded',
+            'sync_request', 'u', 'tool_modeussync_course_queue', $queue->id, $course->id,
+            ['createdcount' => 1]);
+        $this->assert_event_metadata($sink->get_events(), sync_failed::class, 'failed',
+            'sync_request', 'u', 'tool_modeussync_course_queue', $queue->id, $course->id,
+            ['createdcount' => 1]);
+    }
+
+    public function test_repeat_sync_retries_fully_synced_queue_and_updates_failure_state(): void {
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'synced-before-repeat',
+            'name' => 'Синхронизированное задание',
+            'grade' => 25,
+        ]]);
+        (new creation_service(null, null, null, new fake_modeus_sync_service()))->process(
+            $course->id,
+            2,
+            [$items[0]->id => target_module::ASSIGN]
+        );
+        $failedsync = new fake_modeus_sync_service();
+        $failedsync->fail = true;
+        $failedsync->beforesend = function() use ($course): void {
+            $this->assertSame(
+                course_status::AWAITING_SYNC,
+                (new queue_repository())->get_course_queue($course->id)->status
+            );
+        };
+
+        $result = (new creation_service(null, null, null, $failedsync))->repeat_sync($course->id);
+
+        $this->assertFalse($result->syncsucceeded);
+        $this->assertSame(course_status::SYNC_FAILED, $result->status);
+        $this->assertCount(1, $failedsync->payloads);
+        $this->assertSame(
+            course_status::SYNC_FAILED,
+            (new queue_repository())->get_course_queue($course->id)->status
+        );
+    }
+
+    public function test_repeat_sync_rejects_queue_without_existing_created_activity(): void {
+        global $CFG, $DB;
+
+        require_once($CFG->dirroot . '/course/lib.php');
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [[
+            'id' => 'deleted-before-repeat',
+            'name' => 'Удалённое задание',
+            'grade' => 25,
+        ]]);
+        $repository = new queue_repository();
+        $cmid = (new assign_factory())->create(
+            $course,
+            (new section_manager())->get_or_create($course->id),
+            $items[0]
+        );
+        $repository->mark_item_created($items[0]->id, $cmid, 2, target_module::ASSIGN);
+        course_delete_module($cmid, false);
+        $DB->update_record('tool_modeussync_queue_items', (object) [
+            'id' => $items[0]->id,
+            'status' => item_status::CREATED,
+            'coursemoduleid' => $cmid,
+        ]);
+        $sync = new fake_modeus_sync_service();
+
+        try {
+            (new creation_service(null, null, null, $sync))->repeat_sync($course->id);
+            $this->fail('Expected moodle_exception was not thrown.');
+        } catch (moodle_exception $exception) {
+            $this->assertSame('nothingtorepeatlink', $exception->errorcode);
+        }
+
+        $this->assertSame([], $sync->payloads);
     }
 
     public function test_missing_created_activity_is_recreated_before_sync_retry(): void {

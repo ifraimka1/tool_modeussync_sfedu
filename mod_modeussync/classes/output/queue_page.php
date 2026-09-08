@@ -37,6 +37,7 @@ final class queue_page implements \renderable, \templatable {
         $rows = [];
         $hasfaileditems = false;
         $hasmissingcreateditems = false;
+        $hasexistingcreateditems = false;
 
         foreach (item_sorter::sort($this->items) as $item) {
             $hasfaileditems = $hasfaileditems || $item->status === item_status::FAILED;
@@ -58,6 +59,9 @@ final class queue_page implements \renderable, \templatable {
             }
             if ($item->status === item_status::CREATED && !$activityexists) {
                 $hasmissingcreateditems = true;
+            }
+            if ($item->status === item_status::CREATED && $activityexists) {
+                $hasexistingcreateditems = true;
             }
             if ($activityexists) {
                 $activityurl = (new \moodle_url('/mod/' . $item->targetmodule . '/view.php', [
@@ -97,6 +101,8 @@ final class queue_page implements \renderable, \templatable {
             'buttonlabel' => get_string($buttonkey, 'mod_modeussync'),
             'buttondisabled' => $this->queue->status === course_status::SYNCED &&
                 !$hasmissingcreateditems,
+            'repeatlinklabel' => get_string('repeatlink', 'mod_modeussync'),
+            'repeatlinkdisabled' => !$hasexistingcreateditems,
             'queuestatus' => get_string('course_status_' . $this->queue->status, 'mod_modeussync'),
         ];
     }
