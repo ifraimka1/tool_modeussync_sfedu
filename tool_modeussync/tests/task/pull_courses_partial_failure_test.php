@@ -225,6 +225,30 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertSame(1, $this->count_attendance_modules($courseid));
     }
 
+    public function test_new_attendance_has_grading_disabled(): void {
+        global $DB;
+
+        $this->resetAfterTest();
+        $this->require_attendance_plugin();
+        $category = $this->getDataGenerator()->create_category();
+        $task = new testable_pull_courses_partial_failure();
+
+        $result = $task->create_for_test([$this->valid_prototype()], (int) $category->id);
+
+        $courseid = (int) $DB->get_field('course', 'id', ['idnumber' => $result['courses'][0]['id_lms']], MUST_EXIST);
+        $attendancemoduleid = $DB->get_field('modules', 'id', ['name' => 'attendance'], MUST_EXIST);
+        $attendance = $DB->get_record('attendance', [
+            'course' => $courseid,
+            'coursemodule' => $DB->get_field('course_modules', 'id', [
+                'course' => $courseid,
+                'module' => $attendancemoduleid,
+                'deletioninprogress' => 0,
+            ], MUST_EXIST),
+        ], '*', MUST_EXIST);
+
+        $this->assertSame(0, (int) $attendance->grade);
+    }
+
     public function test_existing_course_without_attendance_gets_one_in_general_section(): void {
         $this->resetAfterTest();
         $this->require_attendance_plugin();

@@ -521,6 +521,7 @@ class pull_courses extends base_sync_job
             'cmidnumber' => '',
             'groupmode' => NOGROUPS,
             'groupingid' => 0,
+            'grade' => 0,
         ];
 
         add_moduleinfo($moduleinfo, $course);
