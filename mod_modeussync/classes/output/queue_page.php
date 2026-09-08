@@ -75,7 +75,7 @@ final class queue_page implements \renderable, \templatable {
                 'selectedassign' => $item->targetmodule === target_module::ASSIGN,
                 'selectedquiz' => $item->targetmodule === target_module::QUIZ,
                 'selectedworkshop' => $item->targetmodule === target_module::WORKSHOP,
-                'disabled' => $item->status === item_status::CREATED || !$this->canmanage,
+                'disabled' => ($item->status === item_status::CREATED && $activityexists) || !$this->canmanage,
                 'activityurl' => $activityurl,
                 'error' => !empty($item->lasterror) ? (string) $item->lasterror : null,
             ];

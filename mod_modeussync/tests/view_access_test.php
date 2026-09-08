@@ -179,6 +179,8 @@ final class view_access_test extends advanced_testcase {
             new moodle_url('/mod/modeussync/view.php', ['id' => 99]),
             true
         ))->export_for_template($PAGE->get_renderer('core'));
+        $this->assertFalse($missingexport->items[0]['disabled']);
+        $this->assertNull($missingexport->items[0]['activityurl']);
         $this->assertFalse($missingexport->buttondisabled);
         $this->assertSame(get_string('retrycreation', 'mod_modeussync'), $missingexport->buttonlabel);
     }
