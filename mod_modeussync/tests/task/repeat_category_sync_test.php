@@ -67,9 +67,9 @@ final class repeat_category_sync_test extends advanced_testcase {
             'includesubcategories' => false,
         ]);
         $directtask->execute();
-        $this->assertSame([
-            [['id_modeus' => 'parent-modeus', 'id_lms' => 'parent-code']],
-        ], $syncservice->payloads);
+        $this->assertCount(1, $syncservice->payloads);
+        $this->assertSame('parent-modeus', $syncservice->payloads[0][0]['id_modeus']);
+        $this->assertSame('parent-code', $syncservice->payloads[0][0]['id_lms']);
 
         $syncservice->payloads = [];
         $recursivetask = $this->task($syncservice);
@@ -79,15 +79,9 @@ final class repeat_category_sync_test extends advanced_testcase {
         ]);
         $recursivetask->execute();
 
-        $expected = [
-            $parentcourse->id => [['id_modeus' => 'parent-modeus', 'id_lms' => 'parent-code']],
-            $childcourse->id => [['id_modeus' => 'child-modeus', 'id_lms' => 'child-code']],
-        ];
-        ksort($expected);
-        $this->assertSame(
-            array_values($expected),
-            $syncservice->payloads
-        );
+        $this->assertCount(2, $syncservice->payloads);
+        $this->assertSame('parent-code', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('child-code', $syncservice->payloads[1][0]['id_lms']);
     }
 
     /**
@@ -151,11 +145,17 @@ final class repeat_category_sync_test extends advanced_testcase {
             'category' => $categoryid,
             'idnumber' => $idnumber,
         ]);
+        (new \tool_modeussync\repository\course_map_repository())->upsert(
+            (int) $course->id,
+            $idnumber,
+            'prototype-' . $idnumber
+        );
         $this->getDataGenerator()->create_module('modeussync', ['course' => $course->id]);
         $repository = new queue_repository();
         $queue = $repository->upsert_course_queue($course->id, $idmodeus);
         [$item] = $repository->upsert_item($queue->id, [
             'id' => $externalid,
+            'lesson_id' => 'lesson-' . $externalid,
             'name' => 'Assignment ' . $externalid,
             'grade' => 25,
         ]);

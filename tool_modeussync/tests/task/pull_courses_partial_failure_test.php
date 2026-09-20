@@ -127,7 +127,11 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
         $this->assertSame('valid-modeus-id', $map->rmupid);
         $this->assertSame(1, $DB->count_records('tool_modeussync_course_map'));
         $this->assertSame($courseid, (int) $DB->get_field('course', 'id', ['idnumber' => 'valid-modeus-id'], MUST_EXIST));
-        $this->assertSame([['id_lms' => 'valid-modeus-id', 'id_modeus' => 'valid-modeus-id']], $result['courses']);
+        $this->assertSame([[
+            'id_lms' => 'valid-modeus-id',
+            'id_modeus' => 'valid-modeus-id',
+            'externalId' => 'adapter-second',
+        ]], $result['courses']);
 
         $method = new ReflectionMethod(\tool_modeussync\task\push_courses::class, 'getCoursesToPush');
         $method->setAccessible(true);
@@ -633,6 +637,7 @@ final class pull_courses_partial_failure_test extends advanced_testcase {
 
         $this->assertTrue($task->do_work(['id' => 'session-1'], null));
         $this->assertCount(1, $syncservice->batches);
+        $this->assertSame('valid-course-id', $syncservice->batches[0][0]['externalId']);
         $this->assertTrue($DB->record_exists('tool_modeussync_course_map', ['prototypeid' => 'valid-course-id']));
         $this->assertSame(0, $DB->count_records('tool_modeussync_course_queue'));
     }

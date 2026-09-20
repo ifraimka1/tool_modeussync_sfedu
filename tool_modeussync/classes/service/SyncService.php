@@ -78,7 +78,11 @@ class SyncService
      *
      * Формат payload:
      * [
-     *   ['id_lms' => 'moodle-course-idnumber', 'id_modeus' => 'uuid'],
+     *   [
+     *     'id_lms' => 'moodle-course-idnumber',
+     *     'id_modeus' => 'uuid',
+     *     'externalId' => 'lms-adapter-course-prototype-id',
+     *   ],
      *   ...
      * ]
      *
@@ -96,6 +100,15 @@ class SyncService
         return $this->post_courses(self::CREATED_COURSES_ENDPOINT, $courses, true);
     }
 
+    /**
+     * Sends course and created-element links to SyncService.
+     *
+     * Each course contains id_modeus, id_lms, externalId and a lowercase links array.
+     *
+     * @param array $courses
+     * @return array
+     * @throws \moodle_exception
+     */
     public function send_sync_courses(array $courses): array
     {
         if (empty($courses)) {

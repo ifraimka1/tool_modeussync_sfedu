@@ -19,6 +19,7 @@ use tool_modeussync\local\queue\item_status;
 use tool_modeussync\local\queue\queue_repository;
 use tool_modeussync\local\queue\sync_response_ingestor;
 use tool_modeussync\local\queue\target_module;
+use tool_modeussync\repository\course_map_repository;
 use tool_modeussync\task\push_courses;
 
 /** SyncService double preserving the exact public `/sync` call shape. */
@@ -82,7 +83,7 @@ final class rollback_after_course_module_cache_factory implements activity_facto
     }
 }
 
-/** Integration tests for creation, reconciliation, partial retries, and unchanged `/sync`. */
+/** Integration tests for creation, reconciliation, partial retries, and the current `/sync` contract. */
 final class creation_service_test extends advanced_testcase {
 
     public function test_process_creates_activities_in_display_sort_order(): void {
@@ -131,8 +132,18 @@ final class creation_service_test extends advanced_testcase {
         $this->resetAfterTest();
         $course = $this->course();
         [$queue, $items] = $this->queue($course->id, [
-            ['id' => 'assign-1', 'name' => 'Практическая работа', 'grade' => 37.5],
-            ['id' => 'quiz-1', 'name' => 'Итоговый тест', 'grade' => 62],
+            [
+                'id' => 'assign-1',
+                'lesson_id' => 'lesson-assign',
+                'name' => 'Практическая работа',
+                'grade' => 37,
+            ],
+            [
+                'id' => 'quiz-1',
+                'lesson_id' => 'lesson-quiz',
+                'name' => 'Итоговый тест',
+                'grade' => 62,
+            ],
         ]);
         $sync = new fake_modeus_sync_service();
         $sink = $this->redirectEvents();
@@ -146,7 +157,23 @@ final class creation_service_test extends advanced_testcase {
         $this->assertSame(2, $result->createdcount);
         $this->assertSame(0, $result->failedcount);
         $this->assertTrue($result->syncattempted);
-        $this->assertSame([[['id_modeus' => 'modeus-course-1', 'id_lms' => 'course-code']]], $sync->payloads);
+        $storeditems = (new queue_repository())->get_items($queue->id);
+        $this->assertSame([[[
+            'id_modeus' => 'modeus-course-1',
+            'id_lms' => 'course-code',
+            'externalId' => 'prototype-course-code',
+            'links' => [[
+                'modeus_id' => 'assign-1',
+                'lesson_id' => 'lesson-assign',
+                'control_object_type' => 'assign',
+                'lms_element_id' => (string) $storeditems[0]->coursemoduleid,
+            ], [
+                'modeus_id' => 'quiz-1',
+                'lesson_id' => 'lesson-quiz',
+                'control_object_type' => 'quiz',
+                'lms_element_id' => (string) $storeditems[1]->coursemoduleid,
+            ]],
+        ]]], $sync->payloads);
         $this->assertSame(course_status::SYNCED, (new queue_repository())->get_course_queue($course->id)->status);
 
         $events = $sink->get_events();
@@ -167,6 +194,26 @@ final class creation_service_test extends advanced_testcase {
             'tool_modeussync_course_queue', $queue->id, $course->id, ['createdcount' => 2]);
         $this->assert_event_metadata($events, sync_succeeded::class, 'succeeded', 'sync_request', 'u',
             'tool_modeussync_course_queue', $queue->id, $course->id, ['createdcount' => 2]);
+    }
+
+    public function test_process_does_not_send_sync_without_lesson_id(): void {
+        $this->resetAfterTest();
+        $course = $this->course();
+        $repository = new queue_repository();
+        $queue = $repository->upsert_course_queue($course->id, 'modeus-course-1');
+        [$item] = $repository->upsert_item($queue->id, [
+            'id' => 'missing-lesson',
+            'name' => 'Элемент без занятия',
+            'grade' => 25,
+        ]);
+        $sync = new fake_modeus_sync_service();
+
+        $result = (new creation_service(null, null, null, $sync))->process($course->id, 2, [
+            $item->id => target_module::ASSIGN,
+        ]);
+
+        $this->assertSame(course_status::SYNC_FAILED, $result->status);
+        $this->assertSame([], $sync->payloads);
     }
 
     public function test_process_uses_nonempty_override_and_falls_back_for_blank_override(): void {
@@ -767,7 +814,15 @@ final class creation_service_test extends advanced_testcase {
         $this->assertSame(course_status::PENDING, $result->status);
         $this->assertSame(1, $result->createdcount);
         $this->assertSame(0, $nevercreate->calls);
-        $this->assertSame([[['id_modeus' => 'modeus-course-1', 'id_lms' => 'course-code']]], $sync->payloads);
+        $this->assertSame('modeus-course-1', $sync->payloads[0][0]['id_modeus']);
+        $this->assertSame('course-code', $sync->payloads[0][0]['id_lms']);
+        $this->assertSame('prototype-course-code', $sync->payloads[0][0]['externalId']);
+        $this->assertSame([[
+            'modeus_id' => 'created-before-repeat',
+            'lesson_id' => 'lesson-created-before-repeat',
+            'control_object_type' => 'assign',
+            'lms_element_id' => (string) $cmid,
+        ]], $sync->payloads[0][0]['links']);
         $this->assertSame(course_status::PENDING, $repository->get_course_queue($course->id)->status);
         $this->assertSame(item_status::CREATED, $repository->get_item($items[0]->id)->status);
         $this->assertSame(item_status::PENDING, $repository->get_item($items[1]->id)->status);
@@ -903,6 +958,11 @@ final class creation_service_test extends advanced_testcase {
         $course = $this->getDataGenerator()->create_course([
             'idnumber' => 'e2e-lms-course',
         ]);
+        (new course_map_repository())->upsert(
+            (int) $course->id,
+            'e2e-lms-course',
+            'e2e-course-prototype'
+        );
         $response = [
             'results' => [[
                 'success' => true,
@@ -910,10 +970,12 @@ final class creation_service_test extends advanced_testcase {
                 'id_modeus' => 'e2e-modeus-course',
                 'courseData' => [[
                     'id' => 'e2e-assign',
+                    'lesson_id' => 'e2e-lesson-assign',
                     'name' => 'Практическая работа',
                     'grade' => 35,
                 ], [
                     'id' => 'e2e-quiz',
+                    'lesson_id' => 'e2e-lesson-quiz',
                     'name' => 'Итоговый тест',
                     'grade' => 64.5,
                 ]],
@@ -941,8 +1003,10 @@ final class creation_service_test extends advanced_testcase {
         ]);
 
         $this->assertSame(course_status::SYNCED, $result->status);
-        $this->assertSame([[['id_modeus' => 'e2e-modeus-course', 'id_lms' => 'e2e-lms-course']]],
-            $sync->payloads);
+        $this->assertSame('e2e-modeus-course', $sync->payloads[0][0]['id_modeus']);
+        $this->assertSame('e2e-lms-course', $sync->payloads[0][0]['id_lms']);
+        $this->assertSame('e2e-course-prototype', $sync->payloads[0][0]['externalId']);
+        $this->assertCount(2, $sync->payloads[0][0]['links']);
         $assigncm = get_coursemodule_from_id(
             'assign',
             $repository->get_item($itemsbyexternalid['e2e-assign']->id)->coursemoduleid,
@@ -1000,7 +1064,9 @@ final class creation_service_test extends advanced_testcase {
 
     /** @return stdClass */
     private function course(): stdClass {
-        return $this->getDataGenerator()->create_course(['idnumber' => 'course-code']);
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'course-code']);
+        (new course_map_repository())->upsert((int) $course->id, 'course-code', 'prototype-course-code');
+        return $course;
     }
 
     /**
@@ -1012,6 +1078,9 @@ final class creation_service_test extends advanced_testcase {
         $repository = new queue_repository();
         $queue = $repository->upsert_course_queue($courseid, 'modeus-course-1');
         foreach ($items as $item) {
+            if (!array_key_exists('lesson_id', $item)) {
+                $item['lesson_id'] = 'lesson-' . $item['id'];
+            }
             $repository->upsert_item($queue->id, $item);
         }
 

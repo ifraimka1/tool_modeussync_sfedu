@@ -210,11 +210,21 @@ final class sync_service_logger_test extends advanced_testcase {
         $curl = new sync_service_test_curl();
         $curl->response = '';
 
-        $result = (new testable_sync_service(new collecting_sync_logger(), $curl))->send_sync_courses([
-            ['id_modeus' => 'modeus-course-1', 'id_lms' => 'course-code'],
-        ]);
+        $payload = [[
+            'id_modeus' => 'modeus-course-1',
+            'id_lms' => 'course-code',
+            'externalId' => 'course-prototype-1',
+            'links' => [[
+                'modeus_id' => 'control-object-1',
+                'lesson_id' => 'lesson-1',
+                'control_object_type' => 'assign',
+                'lms_element_id' => '42',
+            ]],
+        ]];
+        $result = (new testable_sync_service(new collecting_sync_logger(), $curl))->send_sync_courses($payload);
 
         $this->assertSame([], $result);
         $this->assertSame('https://sync.example.test/sync', $curl->requests[0][0]);
+        $this->assertSame($payload, json_decode($curl->requests[0][1], true));
     }
 }

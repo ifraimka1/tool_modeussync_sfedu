@@ -40,10 +40,10 @@ final class course_runner_test extends advanced_testcase {
 
         $result = $runner->run([$first->id, $second->id]);
 
-        $this->assertSame([
-            [['id_modeus' => 'modeus-course-1', 'id_lms' => 'course-code-1']],
-            [['id_modeus' => 'modeus-course-2', 'id_lms' => 'course-code-2']],
-        ], $syncservice->payloads);
+        $this->assertSame('modeus-course-1', $syncservice->payloads[0][0]['id_modeus']);
+        $this->assertSame('course-code-1', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('modeus-course-2', $syncservice->payloads[1][0]['id_modeus']);
+        $this->assertSame('course-code-2', $syncservice->payloads[1][0]['id_lms']);
         $this->assertEquals((object) [
             'selected' => 2,
             'succeeded' => 2,
@@ -69,10 +69,8 @@ final class course_runner_test extends advanced_testcase {
             'failed' => 1,
             'skipped' => 1,
         ], $result);
-        $this->assertSame([
-            [['id_modeus' => 'modeus-fails', 'id_lms' => 'course-fails']],
-            [['id_modeus' => 'modeus-succeeds', 'id_lms' => 'course-succeeds']],
-        ], $syncservice->payloads);
+        $this->assertSame('course-fails', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('course-succeeds', $syncservice->payloads[1][0]['id_lms']);
     }
 
     public function test_ignores_duplicate_and_nonpositive_course_ids(): void {
@@ -106,11 +104,17 @@ final class course_runner_test extends advanced_testcase {
 
     private function create_pending_course(string $idnumber, string $idmodeus, string $externalid): stdClass {
         $course = $this->getDataGenerator()->create_course(['idnumber' => $idnumber]);
+        (new \tool_modeussync\repository\course_map_repository())->upsert(
+            (int) $course->id,
+            $idnumber,
+            'prototype-' . $idnumber
+        );
         $this->getDataGenerator()->create_module('modeussync', ['course' => $course->id]);
         $repository = new queue_repository();
         $queue = $repository->upsert_course_queue($course->id, $idmodeus);
         $repository->upsert_item($queue->id, [
             'id' => $externalid,
+            'lesson_id' => 'lesson-' . $externalid,
             'name' => 'Assignment ' . $externalid,
             'grade' => 25,
         ]);

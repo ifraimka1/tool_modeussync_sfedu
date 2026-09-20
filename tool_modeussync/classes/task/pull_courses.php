@@ -147,6 +147,7 @@ class pull_courses extends base_sync_job
                         trim((string) $prototypeId) === '' || \core_text::strlen(trim((string) $prototypeId)) > 255) {
                     throw new \UnexpectedValueException("Некорректный ID прототипа LMS Adapter для курса [{$fullname}]");
                 }
+                $externalId = trim((string) $prototypeId);
                 $idModeus = course_reference::extract_modeus_id($coursePrototype['summary'] ?? null);
                 if ($idModeus === null || $idModeus === '' || \core_text::strlen($idModeus) > 255) {
                     throw new \UnexpectedValueException(
@@ -183,6 +184,7 @@ class pull_courses extends base_sync_job
                     $resultcourses[] = array(
                         'id_lms' => (string) $existingCourse->idnumber,
                         'id_modeus' => $idModeus,
+                        'externalId' => $externalId,
                     );
                     continue;
                 }
@@ -203,6 +205,7 @@ class pull_courses extends base_sync_job
                 $resultcourses[] = array(
                     'id_lms' => $idModeus,
                     'id_modeus' => $idModeus,
+                    'externalId' => $externalId,
                 );
 
                 mtrace("Создан курс [$fullname], id: ($courseId)");

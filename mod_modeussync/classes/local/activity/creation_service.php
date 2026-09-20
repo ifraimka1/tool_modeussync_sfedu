@@ -13,11 +13,12 @@ use tool_modeussync\local\queue\course_status;
 use tool_modeussync\local\queue\item_status;
 use tool_modeussync\local\queue\queue_repository;
 use tool_modeussync\local\queue\target_module;
+use tool_modeussync\repository\course_map_repository;
 use tool_modeussync\service\SyncService;
 
 defined('MOODLE_INTERNAL') || die();
 
-/** Coordinates validation, reconciliation, partial creation, and unchanged `/sync`. */
+/** Coordinates validation, reconciliation, partial creation, and the current `/sync` contract. */
 final class creation_service {
     /** @var queue_repository */
     private $queues;
@@ -515,16 +516,8 @@ final class creation_service {
         int $createdcount,
         bool $updatecoursestatus = true
     ): \stdClass {
-        $idnumber = trim((string) $course->idnumber);
-
         try {
-            if ($idnumber === '') {
-                throw new \UnexpectedValueException('Moodle course idnumber is empty.');
-            }
-            $this->syncservice->send_sync_courses([[
-                'id_modeus' => $queue->idmodeus,
-                'id_lms' => $idnumber,
-            ]]);
+            $this->syncservice->send_sync_courses([$this->build_sync_course_payload($queue, $course)]);
         } catch (\Throwable $exception) {
             if ($updatecoursestatus) {
                 $this->queues->set_course_status(
@@ -570,6 +563,61 @@ final class creation_service {
             true,
             true
         );
+    }
+
+    /**
+     * Builds the current SyncService /sync contract for one Moodle course.
+     *
+     * @param \stdClass $queue Course queue.
+     * @param \stdClass $course Moodle course.
+     * @return array
+     */
+    private function build_sync_course_payload(\stdClass $queue, \stdClass $course): array {
+        $idnumber = trim((string) $course->idnumber);
+        $idmodeus = trim((string) $queue->idmodeus);
+        if ($idnumber === '' || $idmodeus === '') {
+            throw new \UnexpectedValueException('Course identifiers for /sync must not be empty.');
+        }
+
+        $mapping = (new course_map_repository())->get_by_courseid((int) $course->id);
+        $externalid = $mapping === null ? '' : trim((string) $mapping->prototypeid);
+        if ($externalid === '') {
+            throw new \UnexpectedValueException('Course prototype externalId for /sync is missing.');
+        }
+
+        $links = [];
+        foreach ($this->queues->get_items((int) $queue->id) as $item) {
+            if (!$this->created_activity_exists((int) $course->id, $item)) {
+                continue;
+            }
+
+            $source = json_decode((string) $item->payloadjson, true);
+            if (!is_array($source) || !array_key_exists('lesson_id', $source) ||
+                    (!is_string($source['lesson_id']) && !is_int($source['lesson_id']))) {
+                throw new \UnexpectedValueException('Created queue item lesson_id for /sync is missing.');
+            }
+            $lessonid = trim((string) $source['lesson_id']);
+            if ($lessonid === '') {
+                throw new \UnexpectedValueException('Created queue item lesson_id for /sync is empty.');
+            }
+
+            $links[] = [
+                'modeus_id' => (string) $item->externalid,
+                'lesson_id' => $lessonid,
+                'control_object_type' => (string) $item->targetmodule,
+                'lms_element_id' => (string) $item->coursemoduleid,
+            ];
+        }
+        if (empty($links)) {
+            throw new \UnexpectedValueException('Course has no created element links for /sync.');
+        }
+
+        return [
+            'id_modeus' => $idmodeus,
+            'id_lms' => $idnumber,
+            'externalId' => $externalid,
+            'links' => $links,
+        ];
     }
 
     private function trigger_event(string $eventclass, array $data): void {

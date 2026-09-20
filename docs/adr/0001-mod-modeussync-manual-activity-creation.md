@@ -55,8 +55,9 @@ GET api/v1/lms/{lmsId}/sync-sessions/{sessionId}/sync/courses
 
 ```json
 {
-  "id_lms": 123,
-  "id_modeus": "modeus-course-id"
+  "id_lms": "moodle-course-idnumber",
+  "id_modeus": "modeus-course-id",
+  "externalId": "lms-adapter-course-prototype-id"
 }
 ```
 
@@ -81,11 +82,12 @@ POST {syncservice_base_url}/new-course
   "results": [
     {
       "success": true,
-      "id_lms": 123,
+      "id_lms": "moodle-course-idnumber",
       "id_modeus": "modeus-course-id",
       "courseData": [
         {
           "id": "modeus-assignment-id",
+          "lesson_id": "lesson-id",
           "name": "Название задания",
           "grade": 100
         }
@@ -95,7 +97,8 @@ POST {syncservice_base_url}/new-course
 }
 ```
 
-Массив `results[*].courseData` является источником заданий для курса.
+Массив `results[*].courseData` является источником заданий для курса. Поле `lesson_id` из каждого элемента
+сохраняется в `payloadjson` и затем возвращается в `links[*].lesson_id` запроса `/sync`.
 
 ### 2.4. Текущее создание заданий
 
@@ -512,32 +515,37 @@ quiz_activity_factory
 
 ## 13. Уведомление SyncService
 
-SyncService не меняется. После успешного создания или обнаружения всех элементов вызывается существующий метод:
+После успешного создания или обнаружения всех элементов вызывается существующий метод:
 
 ```php
 \tool_modeussync\service\SyncService::send_sync_courses()
 ```
 
-Контракт `POST /sync` сохраняется:
+Контракт `POST /sync` передаёт явные связи созданных элементов LMS с объектами контроля Modeus:
 
 ```json
 [
   {
     "id_modeus": "modeus-course-id",
-    "id_lms": "moodle-course-idnumber"
+    "id_lms": "moodle-course-idnumber",
+    "externalId": "lms-adapter-course-prototype-id",
+    "links": [
+      {
+        "modeus_id": "control-object-id",
+        "lesson_id": "lesson-id",
+        "control_object_type": "assign",
+        "lms_element_id": "12345"
+      }
+    ]
   }
 ]
 ```
 
-В `/sync` не передаются:
-
-- Modeus ID отдельных заданий;
-- Moodle `cmid`;
-- выбранный тип;
-- максимальная оценка;
-- пользователь, создавший элементы.
-
-Это ограничение относится только к прямому контракту SyncService `POST /sync`.
+`externalId` берётся из `tool_modeussync_course_map.prototypeid`. Для каждой созданной записи очереди
+`modeus_id` берётся из `externalid`, `lesson_id` — из исходного `courseData`, сохранённого в `payloadjson`,
+`control_object_type` — из выбранного преподавателем `targetmodule`, а `lms_element_id` — из созданного
+`course_modules.id`. При отсутствии любого обязательного идентификатора запрос не отправляется и используется
+штатная обработка ошибки `/sync`.
 
 Созданные `assign` и `quiz` продолжают участвовать в существующей фоновой синхронизации `tool_modeussync\task\push_courses`. Эта задача передаёт сведения о модулях курса в LmsAdapter:
 
@@ -557,7 +565,7 @@ SyncService не меняется. После успешного создани�
 - `name` — название созданного элемента;
 - `moduleTypeId` — фактический тип `assign` или `quiz`, выбранный преподавателем.
 
-Таким образом, новый процесс не отменяет передачу `cmid` и типа элемента по существующему каналу `push_courses -> LmsAdapter`. Он только не добавляет эти поля в неизменяемый контракт `POST /sync`.
+Фоновый канал `push_courses -> LmsAdapter` сохраняется независимо от прямой передачи связей в `POST /sync`.
 
 Сам `mod_modeussync` является техническим интерфейсом, а не учебным элементом РМУП. Поэтому `push_courses` должен исключать его:
 
@@ -711,7 +719,7 @@ Unit-тесты:
 - сохранение выбранного `targetmodule`;
 - повторное открытие `synced` при новом задании;
 - отсутствие повторного открытия при идентичном ответе;
-- формирование неизменного payload `/sync`.
+- формирование актуального payload `/sync` с `externalId` и `links`.
 
 Интеграционные тесты:
 
@@ -763,7 +771,7 @@ Unit-тесты:
 11. Частичная ошибка не удаляет успешно созданные элементы.
 12. Повторная попытка не создаёт дубликаты.
 13. `/sync` вызывается только после создания всех элементов.
-14. Payload `/sync` полностью соответствует существующему контракту.
+14. Payload `/sync` содержит `id_modeus`, `id_lms`, `externalId` и нижнерегистровый массив `links` со связями созданных элементов.
 15. При ошибке `/sync` элементы сохраняются, а отправку можно повторить отдельно.
 16. `mod_modeussync` использует настройки и публичный SyncService-клиент `tool_modeussync`.
 17. Студент не может открыть страницу или запустить создание.
@@ -776,8 +784,7 @@ Unit-тесты:
 В первую версию не входят:
 
 - изменение SyncService;
-- новый контракт `/new-course` или `/sync`;
-- изменение контракта `POST /sync` для добавления `cmid` и выбранного типа элемента;
+- новый контракт `/new-course`;
 - создание вопросов в `quiz`;
 - поддержка Moodle-модулей кроме `assign` и `quiz`;
 - преобразование уже созданного `assign` в `quiz`;
