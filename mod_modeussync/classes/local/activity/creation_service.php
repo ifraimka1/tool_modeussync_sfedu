@@ -531,9 +531,15 @@ final class creation_service {
                 'context' => $context,
                 'other' => ['createdcount' => $createdcount],
             ]);
+            $errormessage = $exception->getMessage();
+            $apikey = trim((string) get_config('tool_modeussync', 'internal_api_key'));
+            if ($apikey !== '') {
+                $errormessage = str_replace($apikey, '[redacted]', $errormessage);
+            }
+            $errormessage = str_replace(["\r", "\n"], ' ', $errormessage);
             error_log(
                 '[mod_modeussync sync] queue ' . (int) $queue->id . ': ' .
-                get_class($exception)
+                get_class($exception) . ': ' . $errormessage
             );
 
             return $this->result(
@@ -592,11 +598,11 @@ final class creation_service {
             }
 
             $source = json_decode((string) $item->payloadjson, true);
-            if (!is_array($source) || !array_key_exists('lesson_id', $source) ||
-                    (!is_string($source['lesson_id']) && !is_int($source['lesson_id']))) {
+            $lessonidvalue = is_array($source) ? ($source['lessonId'] ?? null) : null;
+            if (!is_string($lessonidvalue) && !is_int($lessonidvalue)) {
                 throw new \UnexpectedValueException('Created queue item lesson_id for /sync is missing.');
             }
-            $lessonid = trim((string) $source['lesson_id']);
+            $lessonid = trim((string) $lessonidvalue);
             if ($lessonid === '') {
                 throw new \UnexpectedValueException('Created queue item lesson_id for /sync is empty.');
             }
