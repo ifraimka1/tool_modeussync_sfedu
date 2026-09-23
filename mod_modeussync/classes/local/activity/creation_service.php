@@ -579,6 +579,8 @@ final class creation_service {
      * @return array
      */
     private function build_sync_course_payload(\stdClass $queue, \stdClass $course): array {
+        global $DB;
+
         $idnumber = trim((string) $course->idnumber);
         $idmodeus = trim((string) $queue->idmodeus);
         if ($idnumber === '' || $idmodeus === '') {
@@ -607,11 +609,19 @@ final class creation_service {
                 throw new \UnexpectedValueException('Created queue item lesson_id for /sync is empty.');
             }
 
+            $lmselementid = $DB->get_field('course_modules', 'idnumber', [
+                'id' => (int) $item->coursemoduleid,
+                'course' => (int) $course->id,
+            ], MUST_EXIST);
+            if (trim((string) $lmselementid) === '') {
+                throw new \UnexpectedValueException('Created Moodle activity idnumber for /sync is empty.');
+            }
+
             $links[] = [
                 'modeus_id' => (string) $item->externalid,
                 'lesson_id' => $lessonid,
                 'control_object_type' => (string) $item->targetmodule,
-                'lms_element_id' => (string) $item->coursemoduleid,
+                'lms_element_id' => (string) $lmselementid,
             ];
         }
         if (empty($links)) {
