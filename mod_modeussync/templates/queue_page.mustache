@@ -1,5 +1,6 @@
 <div class="mod-modeussync">
     <div class="mb-3 text-muted">{{queuestatus}}</div>
+    {{#queueerror}}<div class="alert alert-danger">{{queueerror}}</div>{{/queueerror}}
     <form method="post" action="{{actionurl}}" data-region="modeussync-queue-form">
         <input type="hidden" name="sesskey" value="{{sesskey}}">
         <input type="hidden" name="confirmrecreate" value="0" data-region="confirm-recreate">

@@ -19,12 +19,16 @@ final class global_sync_fake_service extends \tool_modeussync\service\SyncServic
 
     public function send_sync_courses(array $courses): array {
         $this->payloads[] = $courses;
-        $idnumber = (string) ($courses[0]['id_lms'] ?? '');
-        if (in_array($idnumber, $this->failingidnumbers, true)) {
+        $externalid = (string) ($courses[0]['id_lms'] ?? '');
+        if (in_array($externalid, $this->failingidnumbers, true)) {
             throw new RuntimeException('Deliberate global repeat-sync failure.');
         }
 
-        return [];
+        return ['results' => [[
+            'success' => true,
+            'id_modeus' => $courses[0]['id_modeus'],
+            'linked' => count($courses[0]['links']),
+        ]]];
     }
 }
 
@@ -41,9 +45,9 @@ final class course_runner_test extends advanced_testcase {
         $result = $runner->run([$first->id, $second->id]);
 
         $this->assertSame('modeus-course-1', $syncservice->payloads[0][0]['id_modeus']);
-        $this->assertSame('course-code-1', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('prototype-course-code-1', $syncservice->payloads[0][0]['id_lms']);
         $this->assertSame('modeus-course-2', $syncservice->payloads[1][0]['id_modeus']);
-        $this->assertSame('course-code-2', $syncservice->payloads[1][0]['id_lms']);
+        $this->assertSame('prototype-course-code-2', $syncservice->payloads[1][0]['id_lms']);
         $this->assertEquals((object) [
             'selected' => 2,
             'succeeded' => 2,
@@ -58,7 +62,7 @@ final class course_runner_test extends advanced_testcase {
         $pending = $this->create_pending_course('course-skips', 'modeus-skips', 'assignment-skips');
         $success = $this->create_ready_course('course-succeeds', 'modeus-succeeds', 'assignment-succeeds');
         $syncservice = new global_sync_fake_service();
-        $syncservice->failingidnumbers = ['course-fails'];
+        $syncservice->failingidnumbers = ['prototype-course-fails'];
         $runner = new course_runner(new creation_service(null, null, null, $syncservice));
 
         $result = $runner->run([$failed->id, $pending->id, $success->id]);
@@ -69,8 +73,8 @@ final class course_runner_test extends advanced_testcase {
             'failed' => 1,
             'skipped' => 1,
         ], $result);
-        $this->assertSame('course-fails', $syncservice->payloads[0][0]['id_lms']);
-        $this->assertSame('course-succeeds', $syncservice->payloads[1][0]['id_lms']);
+        $this->assertSame('prototype-course-fails', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('prototype-course-succeeds', $syncservice->payloads[1][0]['id_lms']);
     }
 
     public function test_ignores_duplicate_and_nonpositive_course_ids(): void {
@@ -115,6 +119,8 @@ final class course_runner_test extends advanced_testcase {
         $repository->upsert_item($queue->id, [
             'id' => $externalid,
             'lesson_id' => 'lesson-' . $externalid,
+            'lessonId' => 'lesson-' . $externalid,
+            'typeCode' => 'HOMEWORK',
             'name' => 'Assignment ' . $externalid,
             'grade' => 25,
         ]);

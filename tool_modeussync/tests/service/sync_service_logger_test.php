@@ -202,7 +202,7 @@ final class sync_service_logger_test extends advanced_testcase {
         $this->assertStringNotContainsString('super-secret-key', implode("\n", $logger->messages));
     }
 
-    public function test_sync_endpoint_still_accepts_empty_success_response(): void {
+    public function test_sync_endpoint_rejects_empty_success_response(): void {
         $this->resetAfterTest();
         set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');
         set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
@@ -212,19 +212,23 @@ final class sync_service_logger_test extends advanced_testcase {
 
         $payload = [[
             'id_modeus' => 'modeus-course-1',
-            'id_lms' => 'course-code',
+            'id_lms' => 'course-prototype-1',
             'externalId' => 'course-prototype-1',
             'links' => [[
                 'modeus_id' => 'control-object-1',
                 'lesson_id' => 'lesson-1',
-                'control_object_type' => 'assign',
+                'control_object_type' => 'HOMEWORK',
                 'lms_element_id' => '42',
             ]],
         ]];
-        $result = (new testable_sync_service(new collecting_sync_logger(), $curl))->send_sync_courses($payload);
-
-        $this->assertSame([], $result);
+        try {
+            (new testable_sync_service(new collecting_sync_logger(), $curl))->send_sync_courses($payload);
+            $this->fail('Expected empty /sync response to be rejected.');
+        } catch (moodle_exception $exception) {
+            $this->assertSame('syncrequestfailed', $exception->errorcode);
+        }
         $this->assertSame('https://sync.example.test/sync', $curl->requests[0][0]);
         $this->assertSame($payload, json_decode($curl->requests[0][1], true));
     }
+
 }

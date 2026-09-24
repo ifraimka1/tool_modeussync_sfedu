@@ -18,7 +18,11 @@ final class task_global_sync_fake_service extends \tool_modeussync\service\SyncS
 
     public function send_sync_courses(array $courses): array {
         $this->payloads[] = $courses;
-        return [];
+        return ['results' => [[
+            'success' => true,
+            'id_modeus' => $courses[0]['id_modeus'],
+            'linked' => count($courses[0]['links']),
+        ]]];
     }
 }
 
@@ -69,7 +73,7 @@ final class repeat_category_sync_test extends advanced_testcase {
         $directtask->execute();
         $this->assertCount(1, $syncservice->payloads);
         $this->assertSame('parent-modeus', $syncservice->payloads[0][0]['id_modeus']);
-        $this->assertSame('parent-code', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('prototype-parent-code', $syncservice->payloads[0][0]['id_lms']);
 
         $syncservice->payloads = [];
         $recursivetask = $this->task($syncservice);
@@ -80,8 +84,8 @@ final class repeat_category_sync_test extends advanced_testcase {
         $recursivetask->execute();
 
         $this->assertCount(2, $syncservice->payloads);
-        $this->assertSame('parent-code', $syncservice->payloads[0][0]['id_lms']);
-        $this->assertSame('child-code', $syncservice->payloads[1][0]['id_lms']);
+        $this->assertSame('prototype-parent-code', $syncservice->payloads[0][0]['id_lms']);
+        $this->assertSame('prototype-child-code', $syncservice->payloads[1][0]['id_lms']);
     }
 
     /**
@@ -156,6 +160,8 @@ final class repeat_category_sync_test extends advanced_testcase {
         [$item] = $repository->upsert_item($queue->id, [
             'id' => $externalid,
             'lesson_id' => 'lesson-' . $externalid,
+            'lessonId' => 'lesson-' . $externalid,
+            'typeCode' => 'HOMEWORK',
             'name' => 'Assignment ' . $externalid,
             'grade' => 25,
         ]);

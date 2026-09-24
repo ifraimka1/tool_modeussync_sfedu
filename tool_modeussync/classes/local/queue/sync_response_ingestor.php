@@ -37,7 +37,17 @@ final class sync_response_ingestor {
         $queues = [];
         foreach ($response['results'] as $result) {
             [$idnumber, $idmodeus] = $this->validate_course_result($result);
-            $courses = $DB->get_records('course', ['idnumber' => $idnumber], '', 'id', 0, 2);
+            $maps = $DB->get_records('tool_modeussync_course_map', ['prototypeid' => $idnumber], '', '*', 0, 2);
+            if (count($maps) > 1) {
+                throw new \UnexpectedValueException('The referenced LMS Adapter course UUID is ambiguous.');
+            }
+            if (!empty($maps)) {
+                $mappedcourseid = (int) reset($maps)->courseid;
+                $courses = $DB->get_records('course', ['id' => $mappedcourseid], '', 'id', 0, 2);
+            } else {
+                // Legacy responses used the Moodle course idnumber instead of the adapter UUID.
+                $courses = $DB->get_records('course', ['idnumber' => $idnumber], '', 'id', 0, 2);
+            }
             if (empty($courses)) {
                 throw new \UnexpectedValueException('The referenced Moodle course does not exist.');
             }

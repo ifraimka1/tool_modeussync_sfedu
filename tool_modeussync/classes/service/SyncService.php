@@ -116,7 +116,7 @@ class SyncService
             return [];
         }
 
-        return $this->post_courses(self::SYNC_ENDPOINT, $courses, false);
+        return $this->post_courses(self::SYNC_ENDPOINT, $courses, true);
     }
 
     /**

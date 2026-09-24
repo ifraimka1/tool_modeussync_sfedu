@@ -8,11 +8,25 @@ use tool_modeussync\local\queue\item_status;
 use tool_modeussync\local\queue\queue_repository;
 use tool_modeussync\local\queue\sync_response_ingestor;
 use tool_modeussync\local\queue\target_module;
+use tool_modeussync\repository\course_map_repository;
 
 /**
  * Tests for ingesting new-course responses into the Modeus activity queue.
  */
 class sync_response_ingestor_test extends advanced_testcase {
+
+    public function test_adapter_course_uuid_resolves_by_course_map(): void {
+        $this->resetAfterTest();
+        $course = $this->getDataGenerator()->create_course(['idnumber' => 'rmup-course-1']);
+        $adapterid = '1ee1a73c-b122-47de-8859-81ca1a7ff8a0';
+        (new course_map_repository())->upsert((int) $course->id, 'rmup-course-1', $adapterid);
+
+        $queues = (new sync_response_ingestor())->ingest($this->successful_response($adapterid));
+
+        $this->assertCount(1, $queues);
+        $this->assertSame((int) $course->id, (int) $queues[0]->courseid);
+        $this->assertSame('modeus-course-1', $queues[0]->idmodeus);
+    }
 
     public function test_numeric_idnumber_resolves_by_idnumber_not_internal_id(): void {
         $this->resetAfterTest();

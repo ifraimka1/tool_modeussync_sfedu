@@ -120,6 +120,7 @@ final class queue_page implements \renderable, \templatable {
             'repeatlinklabel' => get_string('repeatlink', 'mod_modeussync'),
             'repeatlinkdisabled' => !$hasexistingcreateditems,
             'queuestatus' => get_string('course_status_' . $this->queue->status, 'mod_modeussync'),
+            'queueerror' => !empty($this->queue->lasterror) ? (string) $this->queue->lasterror : null,
         ];
     }
 

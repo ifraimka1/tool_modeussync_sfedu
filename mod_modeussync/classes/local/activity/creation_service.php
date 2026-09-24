@@ -517,13 +517,24 @@ final class creation_service {
         bool $updatecoursestatus = true
     ): \stdClass {
         try {
-            $this->syncservice->send_sync_courses([$this->build_sync_course_payload($queue, $course)]);
+            $payload = $this->build_sync_course_payload($queue, $course);
+            $response = $this->syncservice->send_sync_courses([$payload]);
+            $results = $response['results'] ?? null;
+            if (!is_array($results) || count($results) !== 1 || !is_array($results[0]) ||
+                    ($results[0]['id_modeus'] ?? null) !== $payload['id_modeus'] ||
+                    ($results[0]['success'] ?? null) !== true ||
+                    ($results[0]['linked'] ?? null) !== count($payload['links'])) {
+                throw new \UnexpectedValueException(get_string('syncnotconfirmed', 'mod_modeussync'));
+            }
         } catch (\Throwable $exception) {
             if ($updatecoursestatus) {
+                $displayerror = $exception instanceof \UnexpectedValueException
+                    ? $exception->getMessage()
+                    : get_string('syncfailed', 'mod_modeussync');
                 $this->queues->set_course_status(
                     $queue->id,
                     course_status::SYNC_FAILED,
-                    get_string('syncfailed', 'mod_modeussync')
+                    $displayerror
                 );
             }
             $this->trigger_event(sync_failed::class, [
@@ -579,11 +590,8 @@ final class creation_service {
      * @return array
      */
     private function build_sync_course_payload(\stdClass $queue, \stdClass $course): array {
-        global $DB;
-
-        $idnumber = trim((string) $course->idnumber);
         $idmodeus = trim((string) $queue->idmodeus);
-        if ($idnumber === '' || $idmodeus === '') {
+        if ($idmodeus === '') {
             throw new \UnexpectedValueException('Course identifiers for /sync must not be empty.');
         }
 
@@ -594,6 +602,7 @@ final class creation_service {
         }
 
         $links = [];
+        $linkkeys = [];
         foreach ($this->queues->get_items((int) $queue->id) as $item) {
             if (!$this->created_activity_exists((int) $course->id, $item)) {
                 continue;
@@ -608,20 +617,23 @@ final class creation_service {
             if ($lessonid === '') {
                 throw new \UnexpectedValueException('Created queue item lesson_id for /sync is empty.');
             }
-
-            $lmselementid = $DB->get_field('course_modules', 'idnumber', [
-                'id' => (int) $item->coursemoduleid,
-                'course' => (int) $course->id,
-            ], MUST_EXIST);
-            if (trim((string) $lmselementid) === '') {
-                throw new \UnexpectedValueException('Created Moodle activity idnumber for /sync is empty.');
+            $typecode = is_array($source) ? ($source['typeCode'] ?? null) : null;
+            if (!is_string($typecode) || trim($typecode) === '') {
+                throw new \UnexpectedValueException('Created queue item typeCode for /sync is missing.');
             }
-
+            $typecode = trim($typecode);
+            $key = $lessonid . "\0" . $typecode;
+            if (isset($linkkeys[$key])) {
+                throw new \UnexpectedValueException(
+                    get_string('duplicatelink', 'mod_modeussync', $lessonid . ' / ' . $typecode)
+                );
+            }
+            $linkkeys[$key] = true;
             $links[] = [
                 'modeus_id' => (string) $item->externalid,
                 'lesson_id' => $lessonid,
-                'control_object_type' => (string) $item->targetmodule,
-                'lms_element_id' => (string) $lmselementid,
+                'control_object_type' => $typecode,
+                'lms_element_id' => (string) (int) $item->coursemoduleid,
             ];
         }
         if (empty($links)) {
@@ -630,7 +642,7 @@ final class creation_service {
 
         return [
             'id_modeus' => $idmodeus,
-            'id_lms' => $idnumber,
+            'id_lms' => $externalid,
             'externalId' => $externalid,
             'links' => $links,
         ];
