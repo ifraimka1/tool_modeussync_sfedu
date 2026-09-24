@@ -2,6 +2,8 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+require_once(__DIR__ . '/../../fixtures/adapter_modules_service.php');
+
 use mod_modeussync\local\activity\assign_factory;
 use mod_modeussync\local\activity\creation_service;
 use mod_modeussync\local\activity\section_manager;
@@ -16,6 +18,10 @@ final class global_sync_fake_service extends \tool_modeussync\service\SyncServic
 
     /** @var string[] */
     public $failingidnumbers = [];
+
+    public function get_course_modules(string $externalid): array {
+        return (new modeussync_global_test_adapter_service())->getCourseModules($externalid);
+    }
 
     public function send_sync_courses(array $courses): array {
         $this->payloads[] = $courses;

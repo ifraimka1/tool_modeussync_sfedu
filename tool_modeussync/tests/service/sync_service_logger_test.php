@@ -45,6 +45,14 @@ final class sync_service_test_curl extends curl {
         return $this->response;
     }
 
+    public function get($url, $params = [], $options = []) {
+        $this->requests[] = [$url, $params, $options];
+        if ($this->exception !== null) {
+            throw $this->exception;
+        }
+        return $this->response;
+    }
+
     public function get_info($opt = 0) {
         return $opt ? ($this->info[$opt] ?? null) : $this->info;
     }
@@ -71,6 +79,94 @@ final class testable_sync_service extends SyncService {
 
 /** Tests context-safe SyncService logging without changing HTTP contracts. */
 final class sync_service_logger_test extends advanced_testcase {
+
+    public function test_get_course_modules_uses_internal_key_and_returns_adapter_list(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test/', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $logger = new collecting_sync_logger();
+        $curl = new sync_service_test_curl();
+        $modules = [[
+            'id' => '1ee1a73c-b122-47de-8859-81ca1a7ff8a0',
+            'name' => 'Assignment',
+            'lmsIdNumber' => 'control-1',
+            'moduleTypeId' => 'assign',
+        ]];
+        $curl->response = json_encode($modules);
+
+        $actual = (new testable_sync_service($logger, $curl))->get_course_modules(
+            '7766e359-954e-4c35-86b3-4b2eb1ca5178'
+        );
+
+        $this->assertSame($modules, $actual);
+        $this->assertSame('https://sync.example.test/courses/7766e359-954e-4c35-86b3-4b2eb1ca5178/modules',
+            $curl->requests[0][0]);
+        $this->assertSame([], $curl->requests[0][1]);
+        $headers = $curl->requests[0][2]['CURLOPT_HTTPHEADER'];
+        $this->assertContains('Accept: application/json', $headers);
+        $this->assertContains('X-Internal-API-Key: super-secret-key', $headers);
+        $this->assertStringNotContainsString('super-secret-key', implode("\n", $logger->messages));
+    }
+
+    public function test_get_course_modules_preserves_empty_adapter_list(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $curl = new sync_service_test_curl();
+        $curl->response = '[]';
+
+        $this->assertSame([], (new testable_sync_service(new collecting_sync_logger(), $curl))
+            ->get_course_modules('7766e359-954e-4c35-86b3-4b2eb1ca5178'));
+    }
+
+    public function test_get_course_modules_rejects_upstream_error_and_logs_body(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $logger = new collecting_sync_logger();
+        $curl = new sync_service_test_curl();
+        $curl->info = ['http_code' => 502];
+        $curl->response = '{"error":"adapter unavailable"}';
+
+        try {
+            (new testable_sync_service($logger, $curl))->get_course_modules(
+                '7766e359-954e-4c35-86b3-4b2eb1ca5178'
+            );
+            $this->fail('Expected SyncService error to be rejected.');
+        } catch (moodle_exception $exception) {
+            $this->assertSame('syncrequestfailed', $exception->errorcode);
+        }
+        $log = implode("\n", $logger->messages);
+        $this->assertStringContainsString('HTTP error code: 502', $log);
+        $this->assertStringContainsString('adapter unavailable', $log);
+        $this->assertStringNotContainsString('super-secret-key', $log);
+    }
+
+    public function test_get_course_modules_rejects_invalid_course_uuid_before_request(): void {
+        $this->resetAfterTest();
+        $curl = new sync_service_test_curl();
+        $service = new testable_sync_service(new collecting_sync_logger(), $curl);
+
+        try {
+            $service->get_course_modules('40198');
+            $this->fail('Expected an invalid course UUID to be rejected.');
+        } catch (invalid_parameter_exception $exception) {
+            $this->assertSame([], $curl->requests);
+        }
+    }
+
+    public function test_get_course_modules_rejects_object_response(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $curl = new sync_service_test_curl();
+        $curl->response = '{}';
+
+        $this->expectException(moodle_exception::class);
+        (new testable_sync_service(new collecting_sync_logger(), $curl))->get_course_modules(
+            '7766e359-954e-4c35-86b3-4b2eb1ca5178'
+        );
+    }
 
     public function test_injected_logger_receives_bounded_messages_without_api_key(): void {
         $this->resetAfterTest();
@@ -218,7 +314,7 @@ final class sync_service_logger_test extends advanced_testcase {
                 'modeus_id' => 'control-object-1',
                 'lesson_id' => 'lesson-1',
                 'control_object_type' => 'HOMEWORK',
-                'lms_element_id' => '42',
+                'lms_element_id' => '1ee1a73c-b122-47de-8859-81ca1a7ff8a0',
             ]],
         ]];
         try {

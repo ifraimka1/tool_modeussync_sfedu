@@ -602,6 +602,7 @@ final class creation_service {
         }
 
         $links = [];
+        $createditems = [];
         $linkkeys = [];
         foreach ($this->queues->get_items((int) $queue->id) as $item) {
             if (!$this->created_activity_exists((int) $course->id, $item)) {
@@ -629,16 +630,22 @@ final class creation_service {
                 );
             }
             $linkkeys[$key] = true;
+            $createditems[] = $item;
             $links[] = [
                 'modeus_id' => (string) $item->externalid,
                 'lesson_id' => $lessonid,
                 'control_object_type' => $typecode,
-                'lms_element_id' => (string) (int) $item->coursemoduleid,
             ];
         }
         if (empty($links)) {
             throw new \UnexpectedValueException('Course has no created element links for /sync.');
         }
+
+        $moduleids = $this->resolve_adapter_module_ids($externalid, $course, $createditems);
+        foreach ($links as $index => &$link) {
+            $link['lms_element_id'] = $moduleids[$index];
+        }
+        unset($link);
 
         return [
             'id_modeus' => $idmodeus,
@@ -646,6 +653,78 @@ final class creation_service {
             'externalId' => $externalid,
             'links' => $links,
         ];
+    }
+
+    /** Resolves created Moodle activities to UUIDs returned by LMS Adapter after push_courses. */
+    private function resolve_adapter_module_ids(string $externalid, \stdClass $course, array $items): array {
+        $modules = $this->syncservice->get_course_modules($externalid);
+        if (empty($modules)) {
+            throw new \UnexpectedValueException(get_string('adaptermodulesempty', 'mod_modeussync'));
+        }
+
+        $modinfo = null;
+        $resolved = [];
+        $usedids = [];
+        foreach ($items as $item) {
+            $externalitemid = (string) $item->externalid;
+            $name = null;
+            $matches = [];
+            foreach ($modules as $module) {
+                if (!is_array($module)) {
+                    continue;
+                }
+                if (isset($module['lmsIdNumber']) && (string) $module['lmsIdNumber'] === $externalitemid) {
+                    $matches[] = $module;
+                }
+            }
+
+            if (empty($matches)) {
+                if ($modinfo === null) {
+                    $modinfo = get_fast_modinfo($course);
+                }
+                $cmid = (int) $item->coursemoduleid;
+                $name = isset($modinfo->cms[$cmid]) ? $modinfo->cms[$cmid]->name : null;
+                if (is_string($name) && $name !== '') {
+                    $suffixmatches = [];
+                    foreach ($modules as $module) {
+                        if (!is_array($module) || !is_string($module['name'] ?? null)) {
+                            continue;
+                        }
+                        if (isset($module['lmsIdNumber']) && trim((string) $module['lmsIdNumber']) !== '') {
+                            continue;
+                        }
+                        if ($module['name'] === $name) {
+                            $matches[] = $module;
+                        } else if (preg_match('/^(.+) \([^()]+\)$/u', $module['name'], $parts) === 1 &&
+                                $parts[1] === $name) {
+                            $suffixmatches[] = $module;
+                        }
+                    }
+                    if (empty($matches)) {
+                        $matches = $suffixmatches;
+                    }
+                }
+            }
+
+            if (count($matches) !== 1) {
+                if (empty($matches)) {
+                    throw new \UnexpectedValueException(get_string('adaptermodulenotfound', 'mod_modeussync',
+                        (object) ['id' => $externalitemid, 'name' => $name ?? '']));
+                }
+                throw new \UnexpectedValueException(get_string('adaptermoduleambiguous', 'mod_modeussync', $externalitemid));
+            }
+            $id = $matches[0]['id'] ?? null;
+            if (!is_string($id) || preg_match(
+                '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                $id
+            ) !== 1 || isset($usedids[strtolower($id)])) {
+                throw new \UnexpectedValueException(get_string('adaptermoduleinvalid', 'mod_modeussync', $externalitemid));
+            }
+            $usedids[strtolower($id)] = true;
+            $resolved[] = $id;
+        }
+
+        return $resolved;
     }
 
     private function trigger_event(string $eventclass, array $data): void {

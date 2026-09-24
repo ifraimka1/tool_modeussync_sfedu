@@ -79,9 +79,9 @@ class SyncService
      * Формат payload:
      * [
      *   [
-     *     'id_lms' => 'moodle-course-idnumber',
+     *     'id_lms' => 'lms-adapter-course-uuid',
      *     'id_modeus' => 'uuid',
-     *     'externalId' => 'lms-adapter-course-prototype-id',
+     *     'externalId' => 'lms-adapter-course-uuid',
      *   ],
      *   ...
      * ]
@@ -117,6 +117,74 @@ class SyncService
         }
 
         return $this->post_courses(self::SYNC_ENDPOINT, $courses, true);
+    }
+
+    /** Returns the adapter's complete module list through the authorized SyncService proxy. */
+    public function get_course_modules(string $externalid): array
+    {
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
+                $externalid) !== 1) {
+            throw new \invalid_parameter_exception('The LMS Adapter course externalId must be a UUID.');
+        }
+
+        $apikey = trim((string) get_config('tool_modeussync', 'internal_api_key'));
+        if ($apikey === '') {
+            throw new \moodle_exception('missinginternalapikey', 'tool_modeussync');
+        }
+        $this->secrets = [$apikey];
+
+        $endpoint = '/courses/' . rawurlencode($externalid) . '/modules';
+        $url = $this->get_base_url() . $endpoint;
+        $this->log('SyncService GET: ' . $url);
+        $curl = $this->create_curl();
+        $options = [
+            'CURLOPT_HTTPHEADER' => [
+                'Accept: application/json',
+                'X-Internal-API-Key: ' . $apikey,
+            ],
+            'CURLOPT_CONNECTTIMEOUT' => self::CONNECT_TIMEOUT_SECONDS,
+            'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
+        ];
+
+        try {
+            $response = $curl->get($url, [], $options);
+        } catch (\Throwable $exception) {
+            $safeerror = $this->redact_secrets($exception->getMessage());
+            $this->log('SyncService ' . $endpoint . ' request threw ' . get_class($exception) . ': ' . $safeerror);
+            throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null,
+                'SyncService ' . $endpoint . ' request failed: ' . $safeerror);
+        }
+
+        $info = $curl->get_info();
+        $httpcode = $info['http_code'] ?? null;
+        $errno = (int) $curl->get_errno();
+        if ($errno !== 0) {
+            $curlerror = trim((string) ($curl->error ?? ''));
+            $message = $this->redact_secrets('cURL error ' . $errno .
+                ($curlerror === '' ? '' : ': ' . $curlerror));
+            $this->log('SyncService ' . $endpoint . ' ' . $message);
+            $this->trace_http_error_response('SyncService ' . $endpoint . ' response', $httpcode, $response);
+            throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null, $message);
+        }
+        if ((int) $httpcode < 200 || (int) $httpcode >= 300) {
+            $this->trace_http_error_response('SyncService ' . $endpoint . ' response', $httpcode, $response);
+            throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null,
+                $this->format_http_error_message('SyncService ' . $endpoint . ' returned',
+                    $httpcode, (string) $response));
+        }
+
+        $this->log('SyncService ' . $endpoint . ' response HTTP code: ' . $httpcode);
+        $this->trace_log_value('SyncService ' . $endpoint . ' raw response',
+            $response !== null ? (string) $response : 'NULL');
+        $modules = json_decode((string) $response, true);
+        if (strpos(ltrim((string) $response), '[') !== 0 ||
+                !is_array($modules) || json_last_error() !== JSON_ERROR_NONE ||
+                array_values($modules) !== $modules) {
+            throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null,
+                'SyncService ' . $endpoint . ' returned an invalid modules array. ' .
+                    $this->format_exception_value((string) $response));
+        }
+        return $modules;
     }
 
     /**
