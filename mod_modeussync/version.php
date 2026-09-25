@@ -2,9 +2,9 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version = 2026092404;
+$plugin->version = 2026092501;
 $plugin->requires = 2022112800;
 $plugin->component = 'mod_modeussync';
 $plugin->dependencies = [
-    'tool_modeussync' => 2026092403,
+    'tool_modeussync' => 2026092500,
 ];

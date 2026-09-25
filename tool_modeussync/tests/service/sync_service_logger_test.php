@@ -119,6 +119,60 @@ final class sync_service_logger_test extends advanced_testcase {
             ->get_course_modules('7766e359-954e-4c35-86b3-4b2eb1ca5178'));
     }
 
+    public function test_save_course_modules_posts_saved_course_data_to_adapter_course_uuid(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test/', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $curl = new sync_service_test_curl();
+        $coursedata = [[
+            'id' => 'control-1', 'lessonId' => 'lesson-1', 'name' => 'Assignment',
+            'grade' => 25, 'typeCode' => 'HOMEWORK',
+        ]];
+        $modules = [[
+            'id' => '1ee1a73c-b122-47de-8859-81ca1a7ff8a0',
+            'lmsIdNumber' => 'control-1',
+        ]];
+        $curl->response = json_encode($modules);
+
+        $actual = (new testable_sync_service(new collecting_sync_logger(), $curl))->save_course_modules(
+            '7766e359-954e-4c35-86b3-4b2eb1ca5178', $coursedata
+        );
+
+        $this->assertSame($modules, $actual);
+        $this->assertSame('https://sync.example.test/courses/7766e359-954e-4c35-86b3-4b2eb1ca5178/modules',
+            $curl->requests[0][0]);
+        $this->assertSame($coursedata, json_decode($curl->requests[0][1], true));
+        $this->assertContains('Content-Type: application/json', $curl->requests[0][2]['CURLOPT_HTTPHEADER']);
+        $this->assertContains('X-Internal-API-Key: super-secret-key',
+            $curl->requests[0][2]['CURLOPT_HTTPHEADER']);
+    }
+
+    public function test_save_course_modules_rejects_invalid_course_uuid_before_request(): void {
+        $this->resetAfterTest();
+        $curl = new sync_service_test_curl();
+        $service = new testable_sync_service(new collecting_sync_logger(), $curl);
+
+        try {
+            $service->save_course_modules('d5d3b473', [['id' => 'control-1']]);
+            $this->fail('Expected an invalid adapter course UUID to be rejected.');
+        } catch (invalid_parameter_exception $exception) {
+            $this->assertSame([], $curl->requests);
+        }
+    }
+
+    public function test_save_course_modules_rejects_object_response(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $curl = new sync_service_test_curl();
+        $curl->response = '{}';
+
+        $this->expectException(moodle_exception::class);
+        (new testable_sync_service(new collecting_sync_logger(), $curl))->save_course_modules(
+            '7766e359-954e-4c35-86b3-4b2eb1ca5178', [['id' => 'control-1']]
+        );
+    }
+
     public function test_get_course_modules_rejects_upstream_error_and_logs_body(): void {
         $this->resetAfterTest();
         set_config('syncservice_base_url', 'https://sync.example.test', 'tool_modeussync');

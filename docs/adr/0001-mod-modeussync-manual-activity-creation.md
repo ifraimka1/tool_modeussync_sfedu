@@ -534,18 +534,24 @@ quiz_activity_factory
         "modeus_id": "control-object-id",
         "lesson_id": "lesson-id",
         "control_object_type": "assign",
-        "lms_element_id": "12345"
+        "lms_element_id": "1ee1a73c-b122-47de-8859-81ca1a7ff8a0"
       }
     ]
   }
 ]
 ```
 
-`externalId` берётся из `tool_modeussync_course_map.prototypeid`. Для каждой созданной записи очереди
-`modeus_id` берётся из `externalid`, `lesson_id` — из исходного `courseData`, сохранённого в `payloadjson`,
-`control_object_type` — из выбранного преподавателем `targetmodule`, а `lms_element_id` — из созданного
-`course_modules.id`. При отсутствии любого обязательного идентификатора запрос не отправляется и используется
-штатная обработка ошибки `/sync`.
+`externalId` берётся из `tool_modeussync_course_map.prototypeid` и является UUID курса в LMS Adapter.
+После создания заданий исходные элементы `courseData`, сохранённые в `payloadjson`, отправляются в
+`POST /courses/{externalId}/modules`. Из ответа берётся `id` модуля, сопоставленного строго по
+`lmsIdNumber = courseData.id`. Затем `modeus_id` берётся из `courseData.id`, `lesson_id` — из
+`courseData.lessonId`, `control_object_type` — из `courseData.typeCode`, а `lms_element_id` — из ответа adapter.
+При отсутствии обязательного идентификатора запрос `/sync` не отправляется и используется штатная обработка ошибки.
+`GET /courses/{externalId}/modules` показывает записи adapter и до указанного `POST` возвращает пустой список.
+Если `POST` вернул пустой список или в нём нет `lmsIdNumber` созданного элемента, плагин один раз повторяет
+`POST /new-course` для этого курса. При прежнем наборе идентификаторов он обновляет сохранённый
+`courseData` и повторяет запись в adapter. При изменившемся наборе или повторном отсутствии UUID
+`/sync` не вызывается.
 
 Созданные `assign` и `quiz` продолжают участвовать в существующей фоновой синхронизации `tool_modeussync\task\push_courses`. Эта задача передаёт сведения о модулях курса в LmsAdapter:
 
@@ -565,7 +571,7 @@ quiz_activity_factory
 - `name` — название созданного элемента;
 - `moduleTypeId` — фактический тип `assign` или `quiz`, выбранный преподавателем.
 
-Фоновый канал `push_courses -> LmsAdapter` сохраняется независимо от прямой передачи связей в `POST /sync`.
+Фоновый канал `push_courses -> LmsAdapter` сохраняется, но запись `courseData` перед `/sync` от него не зависит.
 
 Сам `mod_modeussync` является техническим интерфейсом, а не учебным элементом РМУП. Поэтому `push_courses` должен исключать его:
 

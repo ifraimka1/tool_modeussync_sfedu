@@ -119,8 +119,20 @@ class SyncService
         return $this->post_courses(self::SYNC_ENDPOINT, $courses, true);
     }
 
-    /** Returns the adapter's complete module list through the authorized SyncService proxy. */
+    /** Returns modules already stored by the adapter for this LMS course UUID. */
     public function get_course_modules(string $externalid): array
+    {
+        return $this->request_course_modules($externalid);
+    }
+
+    /** Stores the unchanged courseData array and returns the adapter's modules with their UUIDs. */
+    public function save_course_modules(string $externalid, array $coursedata): array
+    {
+        return $this->request_course_modules($externalid, $coursedata);
+    }
+
+    /** Performs GET or POST against the course modules endpoint. */
+    private function request_course_modules(string $externalid, ?array $coursedata = null): array
     {
         if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
                 $externalid) !== 1) {
@@ -135,19 +147,31 @@ class SyncService
 
         $endpoint = '/courses/' . rawurlencode($externalid) . '/modules';
         $url = $this->get_base_url() . $endpoint;
-        $this->log('SyncService GET: ' . $url);
+        $method = $coursedata === null ? 'GET' : 'POST';
+        $this->log('SyncService ' . $method . ': ' . $url);
         $curl = $this->create_curl();
+        $headers = [
+            'Accept: application/json',
+            'X-Internal-API-Key: ' . $apikey,
+        ];
+        if ($coursedata !== null) {
+            $headers[] = 'Content-Type: application/json';
+            $body = json_encode(array_values($coursedata), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($body === false) {
+                throw new \moodle_exception('syncrequestfailed', 'tool_modeussync', '', null,
+                    'JSON encode error: ' . json_last_error_msg());
+            }
+        }
         $options = [
-            'CURLOPT_HTTPHEADER' => [
-                'Accept: application/json',
-                'X-Internal-API-Key: ' . $apikey,
-            ],
+            'CURLOPT_HTTPHEADER' => $headers,
             'CURLOPT_CONNECTTIMEOUT' => self::CONNECT_TIMEOUT_SECONDS,
             'CURLOPT_TIMEOUT' => self::REQUEST_TIMEOUT_SECONDS,
         ];
 
         try {
-            $response = $curl->get($url, [], $options);
+            $response = $coursedata === null
+                ? $curl->get($url, [], $options)
+                : $curl->post($url, $body, $options);
         } catch (\Throwable $exception) {
             $safeerror = $this->redact_secrets($exception->getMessage());
             $this->log('SyncService ' . $endpoint . ' request threw ' . get_class($exception) . ': ' . $safeerror);

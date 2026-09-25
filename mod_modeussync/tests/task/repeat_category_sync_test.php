@@ -18,8 +18,8 @@ final class task_global_sync_fake_service extends \tool_modeussync\service\SyncS
     /** @var array */
     public $payloads = [];
 
-    public function get_course_modules(string $externalid): array {
-        return (new modeussync_global_test_adapter_service())->getCourseModules($externalid);
+    public function save_course_modules(string $externalid, array $coursedata): array {
+        return (new modeussync_global_test_adapter_service())->saveCourseModules($externalid, $coursedata);
     }
 
     public function send_sync_courses(array $courses): array {

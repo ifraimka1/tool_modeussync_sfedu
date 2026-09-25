@@ -45,10 +45,30 @@ final class fake_modeus_sync_service extends \tool_modeussync\service\SyncServic
     /** @var string[] */
     public $modulelookups = [];
 
-    public function get_course_modules(string $externalid): array {
+    /** @var array */
+    public $moduleposts = [];
+
+    /** @var array */
+    public $newcoursepayloads = [];
+
+    /** @var array|null */
+    public $newcourseresponse = null;
+
+    public function save_course_modules(string $externalid, array $coursedata): array {
         $this->modulelookups[] = $externalid;
+        $this->moduleposts[] = $coursedata;
         $adapter = $this->moduleadapter ?? new fake_modeus_adapter_service();
-        return $adapter->getCourseModules($externalid);
+        return $adapter->saveCourseModules($externalid, $coursedata);
+    }
+
+    public function send_created_courses(array $courses): array {
+        $this->newcoursepayloads[] = $courses;
+        return $this->newcourseresponse ?? ['results' => [[
+            'success' => true,
+            'id_lms' => $courses[0]['id_lms'],
+            'id_modeus' => $courses[0]['id_modeus'],
+            'courseData' => $this->moduleposts[0],
+        ]]];
     }
 
     public function send_sync_courses(array $courses): array {
@@ -72,6 +92,9 @@ final class fake_modeus_adapter_service {
     /** @var array|null */
     public $modules = null;
 
+    /** @var array|null Responses returned in order when set. */
+    public $responses = null;
+
     public function __construct() {
     }
 
@@ -81,18 +104,19 @@ final class fake_modeus_adapter_service {
             substr($hash, 12, 4) . '-' . substr($hash, 16, 4) . '-' . substr($hash, 20, 12);
     }
 
-    public function getCourseModules(string $courseid): array {
-        global $DB;
+    public function saveCourseModules(string $courseid, array $coursedata): array {
+        if ($this->responses !== null && !empty($this->responses)) {
+            return array_shift($this->responses);
+        }
         if ($this->modules !== null) {
             return $this->modules;
         }
-        $map = $DB->get_record('tool_modeussync_course_map', ['prototypeid' => $courseid], '*', MUST_EXIST);
         $modules = [];
-        foreach ($DB->get_records('course_modules', ['course' => $map->courseid]) as $cm) {
-            if ($cm->idnumber !== null && $cm->idnumber !== '') {
+        foreach ($coursedata as $item) {
+            if (!empty($item['id'])) {
                 $modules[] = [
-                    'id' => self::uuid_for($cm->idnumber),
-                    'lmsIdNumber' => $cm->idnumber,
+                    'id' => self::uuid_for((string) $item['id']),
+                    'lmsIdNumber' => $item['id'],
                 ];
             }
         }
@@ -198,9 +222,14 @@ final class creation_service_test extends advanced_testcase {
             ],
         ]);
         $sync = new fake_modeus_sync_service();
+        $adapter = new fake_modeus_adapter_service();
+        $adapter->modules = [
+            ['id' => fake_modeus_adapter_service::uuid_for('quiz-1'), 'lmsIdNumber' => 'quiz-1'],
+            ['id' => fake_modeus_adapter_service::uuid_for('assign-1'), 'lmsIdNumber' => 'assign-1'],
+        ];
         $sink = $this->redirectEvents();
 
-        $result = ($this->service(null, null, null, $sync))->process($course->id, 2, [
+        $result = ($this->service(null, null, null, $sync, null, $adapter))->process($course->id, 2, [
             $items[0]->id => target_module::ASSIGN,
             $items[1]->id => target_module::QUIZ,
         ]);
@@ -209,7 +238,11 @@ final class creation_service_test extends advanced_testcase {
         $this->assertSame(2, $result->createdcount);
         $this->assertSame(0, $result->failedcount);
         $this->assertTrue($result->syncattempted);
+        $this->assertSame([], $sync->newcoursepayloads);
         $this->assertSame(['prototype-course-code'], $sync->modulelookups);
+        $this->assertSame(array_map(static function($item): array {
+            return json_decode($item->payloadjson, true);
+        }, $items), $sync->moduleposts[0]);
         $storeditems = (new queue_repository())->get_items($queue->id);
         $this->assertSame([[[
             'id_modeus' => 'modeus-course-1',
@@ -309,7 +342,7 @@ final class creation_service_test extends advanced_testcase {
         $this->assertCount(1, $sync->payloads);
     }
 
-    public function test_empty_adapter_modules_prevents_sync_until_course_is_pushed(): void {
+    public function test_empty_adapter_post_response_prevents_sync_until_retry(): void {
         $this->resetAfterTest();
         $course = $this->course();
         [, $items] = $this->queue($course->id, [
@@ -325,6 +358,8 @@ final class creation_service_test extends advanced_testcase {
 
         $this->assertSame(course_status::SYNC_FAILED, $result->status);
         $this->assertSame([], $sync->payloads);
+        $this->assertCount(1, $sync->newcoursepayloads);
+        $this->assertCount(2, $sync->moduleposts);
         $repository = new queue_repository();
         $storeditem = $repository->get_item($items[0]->id);
         $this->assertSame(item_status::CREATED, $storeditem->status);
@@ -342,7 +377,99 @@ final class creation_service_test extends advanced_testcase {
             $sync->payloads[0][0]['links'][0]['lms_element_id']);
     }
 
-    public function test_unique_adapter_module_name_is_used_when_idnumber_is_absent(): void {
+    public function test_empty_adapter_response_refreshes_course_data_once_before_sync(): void {
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [
+            ['id' => 'control-a', 'name' => 'First', 'grade' => 10],
+        ]);
+        $adapter = new fake_modeus_adapter_service();
+        $adapter->responses = [[]];
+        $sync = new fake_modeus_sync_service();
+        $fresh = json_decode($items[0]->payloadjson, true);
+        $fresh['lessonId'] = 'refreshed-lesson';
+        $fresh['typeCode'] = 'EXAM';
+        $sync->newcourseresponse = ['results' => [[
+            'success' => true,
+            'id_lms' => 'prototype-course-code',
+            'id_modeus' => 'modeus-course-1',
+            'courseData' => [$fresh],
+        ]]];
+
+        $result = $this->service(null, null, null, $sync, null, $adapter)->process($course->id, 2, [
+            $items[0]->id => target_module::ASSIGN,
+        ]);
+
+        $this->assertSame(course_status::SYNCED, $result->status);
+        $this->assertSame([[[
+            'id_lms' => 'prototype-course-code',
+            'id_modeus' => 'modeus-course-1',
+            'externalId' => 'prototype-course-code',
+        ]]], $sync->newcoursepayloads);
+        $this->assertCount(2, $sync->moduleposts);
+        $this->assertSame([$fresh], $sync->moduleposts[1]);
+        $this->assertSame($fresh, json_decode((new queue_repository())->get_item($items[0]->id)->payloadjson, true));
+        $this->assertSame('refreshed-lesson', $sync->payloads[0][0]['links'][0]['lesson_id']);
+        $this->assertSame('EXAM', $sync->payloads[0][0]['links'][0]['control_object_type']);
+        $this->assertSame(fake_modeus_adapter_service::uuid_for('control-a'),
+            $sync->payloads[0][0]['links'][0]['lms_element_id']);
+    }
+
+    public function test_refresh_with_different_course_data_ids_does_not_send_sync(): void {
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [
+            ['id' => 'control-a', 'name' => 'First', 'grade' => 10],
+        ]);
+        $adapter = new fake_modeus_adapter_service();
+        $adapter->modules = [];
+        $sync = new fake_modeus_sync_service();
+        $sync->newcourseresponse = ['results' => [[
+            'success' => true,
+            'id_lms' => 'prototype-course-code',
+            'id_modeus' => 'modeus-course-1',
+            'courseData' => [[
+                'id' => 'new-control', 'lessonId' => 'new-lesson', 'name' => 'New',
+                'grade' => 10, 'typeCode' => 'HOMEWORK',
+            ]],
+        ]]];
+
+        $result = $this->service(null, null, null, $sync, null, $adapter)->process($course->id, 2, [
+            $items[0]->id => target_module::ASSIGN,
+        ]);
+
+        $this->assertSame(course_status::SYNC_FAILED, $result->status);
+        $this->assertCount(1, $sync->newcoursepayloads);
+        $this->assertCount(1, $sync->moduleposts);
+        $this->assertSame([], $sync->payloads);
+    }
+
+    public function test_refresh_rejects_result_for_another_modeus_course(): void {
+        $this->resetAfterTest();
+        $course = $this->course();
+        [, $items] = $this->queue($course->id, [
+            ['id' => 'control-a', 'name' => 'First', 'grade' => 10],
+        ]);
+        $adapter = new fake_modeus_adapter_service();
+        $adapter->modules = [];
+        $sync = new fake_modeus_sync_service();
+        $sync->newcourseresponse = ['results' => [[
+            'success' => true,
+            'id_lms' => 'prototype-course-code',
+            'id_modeus' => 'another-course',
+            'courseData' => [json_decode($items[0]->payloadjson, true)],
+        ]]];
+
+        $result = $this->service(null, null, null, $sync, null, $adapter)->process($course->id, 2, [
+            $items[0]->id => target_module::ASSIGN,
+        ]);
+
+        $this->assertSame(course_status::SYNC_FAILED, $result->status);
+        $this->assertCount(1, $sync->moduleposts);
+        $this->assertSame([], $sync->payloads);
+    }
+
+    public function test_adapter_module_name_does_not_replace_missing_idnumber(): void {
         $this->resetAfterTest();
         $course = $this->course();
         [, $items] = $this->queue($course->id, [
@@ -357,11 +484,13 @@ final class creation_service_test extends advanced_testcase {
             $items[0]->id => target_module::ASSIGN,
         ]);
 
-        $this->assertSame(course_status::SYNCED, $result->status);
-        $this->assertSame($uuid, $sync->payloads[0][0]['links'][0]['lms_element_id']);
+        $this->assertSame(course_status::SYNC_FAILED, $result->status);
+        $this->assertSame([], $sync->payloads);
+        $this->assertCount(1, $sync->newcoursepayloads);
+        $this->assertCount(2, $sync->moduleposts);
     }
 
-    public function test_adapter_module_name_with_type_suffix_is_matched(): void {
+    public function test_adapter_module_with_type_suffix_is_matched_by_idnumber(): void {
         $this->resetAfterTest();
         $course = $this->course();
         [, $items] = $this->queue($course->id, [
@@ -369,7 +498,7 @@ final class creation_service_test extends advanced_testcase {
         ]);
         $uuid = '1ee1a73c-b122-47de-8859-81ca1a7ff8a0';
         $adapter = new fake_modeus_adapter_service();
-        $adapter->modules = [['id' => $uuid, 'name' => 'First (Задание)']];
+        $adapter->modules = [['id' => $uuid, 'name' => 'First (Задание)', 'lmsIdNumber' => 'control-a']];
         $sync = new fake_modeus_sync_service();
 
         $result = $this->service(null, null, null, $sync, null, $adapter)->process($course->id, 2, [
@@ -380,7 +509,7 @@ final class creation_service_test extends advanced_testcase {
         $this->assertSame($uuid, $sync->payloads[0][0]['links'][0]['lms_element_id']);
     }
 
-    public function test_exact_adapter_module_name_takes_precedence_over_suffix_match(): void {
+    public function test_adapter_module_idnumber_takes_precedence_over_name(): void {
         $this->resetAfterTest();
         $course = $this->course();
         [, $items] = $this->queue($course->id, [
@@ -389,8 +518,8 @@ final class creation_service_test extends advanced_testcase {
         $uuid = '1ee1a73c-b122-47de-8859-81ca1a7ff8a0';
         $adapter = new fake_modeus_adapter_service();
         $adapter->modules = [
-            ['id' => $uuid, 'name' => 'First'],
-            ['id' => '7d8b39d6-bb27-456a-bccc-7efae49d7242', 'name' => 'First (Задание)'],
+            ['id' => $uuid, 'name' => 'Unrelated name', 'lmsIdNumber' => 'control-a'],
+            ['id' => '7d8b39d6-bb27-456a-bccc-7efae49d7242', 'name' => 'First'],
         ];
         $sync = new fake_modeus_sync_service();
 
@@ -442,6 +571,7 @@ final class creation_service_test extends advanced_testcase {
 
         $this->assertSame(course_status::SYNC_FAILED, $result->status);
         $this->assertSame([], $sync->payloads);
+        $this->assertSame([], $sync->newcoursepayloads);
     }
 
     public function test_numeric_adapter_module_id_is_never_sent_to_sync(): void {
@@ -1272,6 +1402,7 @@ final class creation_service_test extends advanced_testcase {
 
         $this->assertSame(course_status::SYNCED, $result->status);
         $this->assertSame('e2e-modeus-course', $sync->payloads[0][0]['id_modeus']);
+        $this->assertSame($response['results'][0]['courseData'], $sync->moduleposts[0]);
         $this->assertSame('e2e-course-prototype', $sync->payloads[0][0]['id_lms']);
         $this->assertSame('e2e-course-prototype', $sync->payloads[0][0]['externalId']);
         $this->assertCount(2, $sync->payloads[0][0]['links']);

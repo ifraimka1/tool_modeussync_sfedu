@@ -589,7 +589,11 @@ final class creation_service {
      * @param \stdClass $course Moodle course.
      * @return array
      */
-    private function build_sync_course_payload(\stdClass $queue, \stdClass $course): array {
+    private function build_sync_course_payload(
+        \stdClass $queue,
+        \stdClass $course,
+        bool $refreshed = false
+    ): array {
         $idmodeus = trim((string) $queue->idmodeus);
         if ($idmodeus === '') {
             throw new \UnexpectedValueException('Course identifiers for /sync must not be empty.');
@@ -603,6 +607,7 @@ final class creation_service {
 
         $links = [];
         $createditems = [];
+        $coursedata = [];
         $linkkeys = [];
         foreach ($this->queues->get_items((int) $queue->id) as $item) {
             if (!$this->created_activity_exists((int) $course->id, $item)) {
@@ -631,6 +636,7 @@ final class creation_service {
             }
             $linkkeys[$key] = true;
             $createditems[] = $item;
+            $coursedata[] = $source;
             $links[] = [
                 'modeus_id' => (string) $item->externalid,
                 'lesson_id' => $lessonid,
@@ -641,7 +647,16 @@ final class creation_service {
             throw new \UnexpectedValueException('Course has no created element links for /sync.');
         }
 
-        $moduleids = $this->resolve_adapter_module_ids($externalid, $course, $createditems);
+        $modules = $this->syncservice->save_course_modules($externalid, $coursedata);
+        try {
+            $moduleids = $this->resolve_adapter_module_ids($modules, $createditems);
+        } catch (missing_adapter_module_exception $exception) {
+            if ($refreshed) {
+                throw $exception;
+            }
+            $this->refresh_course_data($queue, $externalid);
+            return $this->build_sync_course_payload($queue, $course, true);
+        }
         foreach ($links as $index => &$link) {
             $link['lms_element_id'] = $moduleids[$index];
         }
@@ -655,19 +670,66 @@ final class creation_service {
         ];
     }
 
-    /** Resolves created Moodle activities to UUIDs returned by LMS Adapter after push_courses. */
-    private function resolve_adapter_module_ids(string $externalid, \stdClass $course, array $items): array {
-        $modules = $this->syncservice->get_course_modules($externalid);
-        if (empty($modules)) {
-            throw new \UnexpectedValueException(get_string('adaptermodulesempty', 'mod_modeussync'));
+    /** Refreshes the persisted payload without reacquiring the queue lock already held by the caller. */
+    private function refresh_course_data(\stdClass $queue, string $externalid): void {
+        global $DB;
+
+        $response = $this->syncservice->send_created_courses([[
+            'id_lms' => $externalid,
+            'id_modeus' => (string) $queue->idmodeus,
+            'externalId' => $externalid,
+        ]]);
+        $results = $response['results'] ?? null;
+        if (!is_array($results) || count($results) !== 1 || array_values($results) !== $results ||
+                !is_array($results[0]) ||
+                ($results[0]['success'] ?? null) !== true ||
+                ($results[0]['id_lms'] ?? null) !== $externalid ||
+                (string) ($results[0]['id_modeus'] ?? '') !== (string) $queue->idmodeus ||
+                !isset($results[0]['courseData']) || !is_array($results[0]['courseData']) ||
+                empty($results[0]['courseData']) ||
+                array_values($results[0]['courseData']) !== $results[0]['courseData']) {
+            throw new \UnexpectedValueException(get_string('refreshresponseinvalid', 'mod_modeussync'));
         }
 
-        $modinfo = null;
+        $fresh = $results[0]['courseData'];
+        $storedids = [];
+        foreach ($this->queues->get_items((int) $queue->id) as $item) {
+            $storedids[(string) $item->externalid] = true;
+        }
+        $freshids = [];
+        foreach ($fresh as $item) {
+            $id = is_array($item) && is_scalar($item['id'] ?? null)
+                ? trim((string) $item['id']) : '';
+            if ($id === '' || isset($freshids[$id])) {
+                throw new \UnexpectedValueException('The refreshed /new-course response has invalid courseData ids.');
+            }
+            $freshids[$id] = true;
+        }
+        if (array_diff_key($storedids, $freshids) || array_diff_key($freshids, $storedids)) {
+            throw new \UnexpectedValueException(get_string('refreshidschanged', 'mod_modeussync'));
+        }
+
+        $transaction = $DB->start_delegated_transaction();
+        try {
+            foreach ($fresh as $item) {
+                $this->queues->upsert_item((int) $queue->id, $item);
+            }
+            $transaction->allow_commit();
+        } catch (\Throwable $exception) {
+            $transaction->rollback($exception);
+        }
+    }
+
+    /** Resolves stored courseData identifiers to UUIDs returned by the adapter POST. */
+    private function resolve_adapter_module_ids(array $modules, array $items): array {
+        if (empty($modules)) {
+            throw new missing_adapter_module_exception(get_string('adaptermodulesempty', 'mod_modeussync'));
+        }
+
         $resolved = [];
         $usedids = [];
         foreach ($items as $item) {
             $externalitemid = (string) $item->externalid;
-            $name = null;
             $matches = [];
             foreach ($modules as $module) {
                 if (!is_array($module)) {
@@ -678,38 +740,10 @@ final class creation_service {
                 }
             }
 
-            if (empty($matches)) {
-                if ($modinfo === null) {
-                    $modinfo = get_fast_modinfo($course);
-                }
-                $cmid = (int) $item->coursemoduleid;
-                $name = isset($modinfo->cms[$cmid]) ? $modinfo->cms[$cmid]->name : null;
-                if (is_string($name) && $name !== '') {
-                    $suffixmatches = [];
-                    foreach ($modules as $module) {
-                        if (!is_array($module) || !is_string($module['name'] ?? null)) {
-                            continue;
-                        }
-                        if (isset($module['lmsIdNumber']) && trim((string) $module['lmsIdNumber']) !== '') {
-                            continue;
-                        }
-                        if ($module['name'] === $name) {
-                            $matches[] = $module;
-                        } else if (preg_match('/^(.+) \([^()]+\)$/u', $module['name'], $parts) === 1 &&
-                                $parts[1] === $name) {
-                            $suffixmatches[] = $module;
-                        }
-                    }
-                    if (empty($matches)) {
-                        $matches = $suffixmatches;
-                    }
-                }
-            }
-
             if (count($matches) !== 1) {
                 if (empty($matches)) {
-                    throw new \UnexpectedValueException(get_string('adaptermodulenotfound', 'mod_modeussync',
-                        (object) ['id' => $externalitemid, 'name' => $name ?? '']));
+                    throw new missing_adapter_module_exception(get_string('adaptermodulenotfound', 'mod_modeussync',
+                        (object) ['id' => $externalitemid]));
                 }
                 throw new \UnexpectedValueException(get_string('adaptermoduleambiguous', 'mod_modeussync', $externalitemid));
             }
