@@ -80,6 +80,31 @@ final class testable_sync_service extends SyncService {
 /** Tests context-safe SyncService logging without changing HTTP contracts. */
 final class sync_service_logger_test extends advanced_testcase {
 
+    public function test_get_modeus_course_modules_uses_realization_uuid_and_preserves_course_data(): void {
+        $this->resetAfterTest();
+        set_config('syncservice_base_url', 'https://sync.example.test/api/', 'tool_modeussync');
+        set_config('internal_api_key', 'super-secret-key', 'tool_modeussync');
+        $curl = new sync_service_test_curl();
+        $modules = [[
+            'id' => '0768c190-67ca-47bd-9236-4db3717c4ad3',
+            'lessonId' => 'd376b9d2-1ecf-02d8-39cc-ee885967a8a6',
+            'name' => 'Assignment', 'grade' => 20, 'typeCode' => 'INDIVIDUAL',
+        ]];
+        $curl->response = json_encode($modules);
+
+        $actual = (new testable_sync_service(new collecting_sync_logger(), $curl))->get_modeus_course_modules(
+            'd5d3b473-e0e3-4ea9-9f5a-c616c795e870'
+        );
+
+        $this->assertSame($modules, $actual);
+        $this->assertSame('https://sync.example.test/api/courses/d5d3b473-e0e3-4ea9-9f5a-c616c795e870/modules',
+            $curl->requests[0][0]);
+        $this->assertSame([], $curl->requests[0][1]);
+        $this->assertContains('X-Internal-API-Key: super-secret-key',
+            $curl->requests[0][2]['CURLOPT_HTTPHEADER']);
+        $this->assertContains('Accept: application/json', $curl->requests[0][2]['CURLOPT_HTTPHEADER']);
+    }
+
     public function test_get_course_modules_uses_internal_key_and_returns_adapter_list(): void {
         $this->resetAfterTest();
         set_config('syncservice_base_url', 'https://sync.example.test/', 'tool_modeussync');

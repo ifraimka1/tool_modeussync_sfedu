@@ -125,6 +125,12 @@ class SyncService
         return $this->request_course_modules($externalid);
     }
 
+    /** Returns the Modeus courseData snapshot using the realization UUID, not the LMS course UUID. */
+    public function get_modeus_course_modules(string $idmodeus): array
+    {
+        return $this->request_course_modules($idmodeus);
+    }
+
     /** Stores the unchanged courseData array and returns the adapter's modules with their UUIDs. */
     public function save_course_modules(string $externalid, array $coursedata): array
     {
@@ -136,7 +142,7 @@ class SyncService
     {
         if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i',
                 $externalid) !== 1) {
-            throw new \invalid_parameter_exception('The LMS Adapter course externalId must be a UUID.');
+            throw new \invalid_parameter_exception('The course modules path identifier must be a UUID.');
         }
 
         $apikey = trim((string) get_config('tool_modeussync', 'internal_api_key'));
